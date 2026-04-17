@@ -1,6 +1,6 @@
-import * as fs from 'fs';
-import * as path from 'path';
-import * as os from 'os';
+import fs from 'fs';
+import path from 'path';
+import os from 'os';
 
 export function getNotionApiKey(): string {
   const keyPath = path.join(os.homedir(), '.config', 'notion', 'api_key');
