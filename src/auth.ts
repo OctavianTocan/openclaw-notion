@@ -1,36 +1,45 @@
-import * as fs from "node:fs";
-import * as os from "node:os";
-import * as path from "node:path";
+/**
+ * Per-agent Notion API key resolution.
+ *
+ * Each OpenClaw agent can have its own Notion integration, isolated by
+ * separate API keys stored in `~/.config/notion/`. The lookup order is:
+ *
+ * 1. `~/.config/notion/api_key_{agentId}` (agent-specific)
+ * 2. `~/.config/notion/api_key` (shared fallback)
+ *
+ * This guarantees workspace isolation: Alaric (gf_agent) hits Esther's
+ * workspace while Wretch (main / default) hits Tavi's.
+ */
+
+import * as fs from 'node:fs';
+import * as os from 'node:os';
+import * as path from 'node:path';
 
 /**
- * Retrieves the Notion API key from the local filesystem based on the agent context.
+ * Read the Notion API key for the given agent.
  *
- * It first attempts to load an agent-specific key (e.g., `~/.config/notion/api_key_gf_agent`).
- * If not found or no agentId is provided, it falls back to the default `~/.config/notion/api_key`.
- *
- * @param {string} [agentId] The ID of the OpenClaw agent executing the tool.
- * @returns {string} The trimmed Notion API key.
- * @throws {Error} If the key file cannot be read.
+ * @param agentId - OpenClaw agent identifier. Omit or pass `undefined` for
+ *   the default workspace key.
+ * @returns The trimmed API key string.
+ * @throws {Error} When neither the agent-specific nor fallback key file exists.
  */
 export function getNotionApiKey(agentId?: string): string {
-  const configDir = path.join(os.homedir(), ".config", "notion");
+  const configDir = path.join(os.homedir(), '.config', 'notion');
 
   if (agentId) {
     const agentKeyPath = path.join(configDir, `api_key_${agentId}`);
-    try {
-      if (fs.existsSync(agentKeyPath)) {
-        return fs.readFileSync(agentKeyPath, "utf8").trim();
-      }
-    } catch {
-      // Ignore read errors for the agent-specific key and fall back
+    if (fs.existsSync(agentKeyPath)) {
+      return fs.readFileSync(agentKeyPath, 'utf8').trim();
     }
   }
 
-  const defaultKeyPath = path.join(configDir, "api_key");
-  try {
-    return fs.readFileSync(defaultKeyPath, "utf8").trim();
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    throw new Error(`Failed to read Notion API key from ${defaultKeyPath}: ${message}`);
+  const defaultKeyPath = path.join(configDir, 'api_key');
+  if (fs.existsSync(defaultKeyPath)) {
+    return fs.readFileSync(defaultKeyPath, 'utf8').trim();
   }
+
+  throw new Error(
+    `Notion API key not found for agent "${agentId ?? 'default'}". ` +
+      `Expected at ${configDir}/api_key or ${configDir}/api_key_${agentId ?? 'default'}.`
+  );
 }
