@@ -1,13 +1,19 @@
 {
   "name": "openclaw-notion",
   "version": "1.0.0",
-  "description": "Native Notion integration for OpenClaw — 9 tools with markdown-first editing and multi-agent workspace isolation.",
+  "description": "Native Notion integration for OpenClaw — 17 tools with markdown-first editing, sync, and multi-agent workspace isolation.",
   "main": "dist/index.js",
   "scripts": {
     "build": "tsc",
     "test": "vitest run"
   },
-  "keywords": ["openclaw", "notion", "plugin", "ai-agent", "markdown"],
+  "keywords": [
+    "openclaw",
+    "notion",
+    "plugin",
+    "ai-agent",
+    "markdown"
+  ],
   "author": "Octavian Tocan",
   "license": "MIT",
   "repository": {
@@ -16,7 +22,8 @@
   },
   "dependencies": {
     "@notionhq/client": "^5.18.0",
-    "@sinclair/typebox": "^0.34.49"
+    "@sinclair/typebox": "^0.34.49",
+    "gray-matter": "^4.0.3"
   },
   "devDependencies": {
     "@types/node": "^25.6.0",

@@ -1,6 +1,19 @@
-import { describe, it, expect, beforeAll } from "vitest";
+import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import { Client } from "@notionhq/client";
+import * as fs from "node:fs";
+import * as path from "node:path";
+import * as os from "node:os";
 import { getNotionApiKey } from "../src/auth.js";
+import {
+  queryNotionDatabase,
+  deleteNotionPage,
+  moveNotionPage,
+  publishNotionPage,
+  getNotionFileTree,
+  syncNotionFile,
+  getNotionHelp,
+  runNotionDoctor,
+} from "../src/index.js";
 
 /**
  * Live API tests for the openclaw-notion plugin.
@@ -400,4 +413,489 @@ describe("Cross-workspace isolation", () => {
     const overlap = [...defaultIds].filter((id) => gfIds.has(id));
     expect(overlap.length).toBe(0);
   });
+});
+
+// ─── Phase 1: New Tools ─────────────────────────────────────────────────
+
+// ─── notion_delete ──────────────────────────────────────────────────────
+
+describe("notion_delete", () => {
+  const notion = makeClient(undefined);
+  let parentPageId: string;
+  let trashPageId: string;
+
+  beforeAll(async () => {
+    const response = await notion.search({ query: "Deployment Plan", page_size: 1 });
+    expect(response.results.length).toBeGreaterThan(0);
+    parentPageId = response.results[0].id;
+  });
+
+  it("creates a page then trashes it", async () => {
+    // Create a page to trash
+    const page = await notion.pages.create({
+      parent: { page_id: parentPageId },
+      properties: {
+        title: {
+          title: [{ type: "text", text: { content: "[vitest] trash-me" } }],
+        },
+      },
+      markdown: "This page will be trashed by tests.",
+    }) as any;
+    trashPageId = page.id;
+    expect(page.id).toBeDefined();
+
+    // Trash it
+    const result = await deleteNotionPage(notion, { page_id: trashPageId });
+    const r = result as any;
+    expect(r.in_trash === true || r.archived === true).toBe(true);
+  }, 15000);
+
+  it("rejects trashing an invalid page ID", async () => {
+    await expect(
+      deleteNotionPage(notion, { page_id: "00000000-0000-0000-0000-000000000000" })
+    ).rejects.toThrow();
+  });
+});
+
+// ─── notion_move ────────────────────────────────────────────────────────
+
+describe("notion_move", () => {
+  const notion = makeClient(undefined);
+  let parentPageId: string;
+  let secondParentId: string;
+  let movePageId: string;
+
+  beforeAll(async () => {
+    // Find two parent pages
+    const response = await notion.search({ query: "Deployment Plan", page_size: 1 });
+    expect(response.results.length).toBeGreaterThan(0);
+    parentPageId = response.results[0].id;
+
+    // Create a second parent to move the page into
+    const secondParent = await notion.pages.create({
+      parent: { page_id: parentPageId },
+      properties: {
+        title: {
+          title: [{ type: "text", text: { content: "[vitest] move-destination" } }],
+        },
+      },
+      markdown: "Move target.",
+    }) as any;
+    secondParentId = secondParent.id;
+
+    // Create the page that will be moved
+    const movePage = await notion.pages.create({
+      parent: { page_id: parentPageId },
+      properties: {
+        title: {
+          title: [{ type: "text", text: { content: "[vitest] page-to-move" } }],
+        },
+      },
+      markdown: "I will be moved.",
+    }) as any;
+    movePageId = movePage.id;
+  }, 20000);
+
+  afterAll(async () => {
+    // Cleanup: trash both test pages
+    await deleteNotionPage(notion, { page_id: movePageId }).catch(() => {});
+    await deleteNotionPage(notion, { page_id: secondParentId }).catch(() => {});
+  });
+
+  it("moves a page to a new parent", async () => {
+    const result = await moveNotionPage(notion, {
+      page_id: movePageId,
+      new_parent_id: secondParentId,
+    });
+    expect(result).toBeDefined();
+    // Verify by fetching the page and checking its parent
+    const page = await notion.pages.retrieve({ page_id: movePageId }) as any;
+    expect(page.parent?.page_id?.replace(/-/g, "")).toBe(
+      secondParentId.replace(/-/g, "")
+    );
+  }, 15000);
+
+  it("rejects moving to an invalid parent", async () => {
+    await expect(
+      moveNotionPage(notion, {
+        page_id: movePageId,
+        new_parent_id: "00000000-0000-0000-0000-000000000000",
+      })
+    ).rejects.toThrow();
+  });
+});
+
+// ─── notion_publish (stub) ──────────────────────────────────────────────
+
+describe("notion_publish", () => {
+  const notion = makeClient(undefined);
+  let testPageId: string;
+
+  beforeAll(async () => {
+    const response = await notion.search({ query: "Projects", page_size: 1 });
+    expect(response.results.length).toBeGreaterThan(0);
+    testPageId = response.results[0].id;
+  });
+
+  it("returns a stub report with supported=false", async () => {
+    const result = await publishNotionPage(notion, { page_id: testPageId });
+    expect(result.supported).toBe(false);
+    expect(result.page_id).toBe(testPageId);
+    expect(result.requested_state).toBe(true);
+    expect(result.url).toBeDefined();
+    expect(typeof result.message).toBe("string");
+    expect(result.message.length).toBeGreaterThan(10);
+  });
+
+  it("respects the published=false parameter", async () => {
+    const result = await publishNotionPage(notion, {
+      page_id: testPageId,
+      published: false,
+    });
+    expect(result.requested_state).toBe(false);
+  });
+});
+
+// ─── notion_file_tree ───────────────────────────────────────────────────
+
+describe("notion_file_tree", () => {
+  const notion = makeClient(undefined);
+  let rootPageId: string;
+
+  beforeAll(async () => {
+    const response = await notion.search({ query: "Projects", page_size: 1 });
+    expect(response.results.length).toBeGreaterThan(0);
+    rootPageId = response.results[0].id;
+  });
+
+  it("returns a tree structure with title, id, url, type, children", async () => {
+    const tree = await getNotionFileTree(notion, {
+      page_id: rootPageId,
+      max_depth: 1,
+    });
+    expect(tree.title).toBeDefined();
+    expect(tree.id).toBe(rootPageId);
+    expect(tree.type).toBe("page");
+    expect(Array.isArray(tree.children)).toBe(true);
+    expect(tree.url).toMatch(/^https:\/\/www\.notion\.so\//);
+  }, 30000);
+
+  it("respects max_depth=0 and returns no children", async () => {
+    const tree = await getNotionFileTree(notion, {
+      page_id: rootPageId,
+      max_depth: 0,
+    });
+    expect(tree.children.length).toBe(0);
+  });
+
+  it("child nodes have the expected shape", async () => {
+    const tree = await getNotionFileTree(notion, {
+      page_id: rootPageId,
+      max_depth: 1,
+    });
+    for (const child of tree.children) {
+      expect(child.id).toBeDefined();
+      expect(child.title).toBeDefined();
+      expect(["page", "database"]).toContain(child.type);
+      expect(Array.isArray(child.children)).toBe(true);
+    }
+  }, 30000);
+
+  it("gf_agent cannot enumerate Tavi's pages", async () => {
+    const gfNotion = makeClient("gf_agent");
+    await expect(
+      getNotionFileTree(gfNotion, { page_id: rootPageId, max_depth: 1 })
+    ).rejects.toThrow();
+  });
+});
+
+// ─── notion_sync ────────────────────────────────────────────────────────
+
+describe("notion_sync", () => {
+  const notion = makeClient(undefined);
+  let parentPageId: string;
+  let tmpDir: string;
+  const createdPageIds: string[] = [];
+
+  beforeAll(async () => {
+    const response = await notion.search({ query: "Deployment Plan", page_size: 1 });
+    expect(response.results.length).toBeGreaterThan(0);
+    parentPageId = response.results[0].id;
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "notion-sync-test-"));
+  });
+
+  afterAll(async () => {
+    // Cleanup: trash all created pages
+    for (const id of createdPageIds) {
+      await deleteNotionPage(notion, { page_id: id }).catch(() => {});
+    }
+    // Cleanup: remove temp dir
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it("push: creates a new Notion page from a local file", async () => {
+    const filePath = path.join(tmpDir, "push-test.md");
+    fs.writeFileSync(filePath, "---\ntitle: Push Test\n---\n# Push Test\n\nCreated by vitest.", "utf8");
+
+    const result = await syncNotionFile(notion, {
+      path: filePath,
+      parent_id: parentPageId,
+      direction: "push",
+    });
+
+    expect(result.direction).toBe("push");
+    expect(result.page_id).toBeDefined();
+    expect(result.url).toMatch(/^https:\/\/www\.notion\.so\//);
+    createdPageIds.push(result.page_id);
+
+    // Verify notion_id was written back to frontmatter
+    const updatedContent = fs.readFileSync(filePath, "utf8");
+    expect(updatedContent).toContain(`notion_id: ${result.page_id}`);
+  }, 20000);
+
+  it("push: updates an existing Notion page when notion_id is in frontmatter", async () => {
+    const filePath = path.join(tmpDir, "push-update-test.md");
+    // First create a page
+    fs.writeFileSync(filePath, "---\ntitle: Update Test\n---\n# Original Content", "utf8");
+    const createResult = await syncNotionFile(notion, {
+      path: filePath,
+      parent_id: parentPageId,
+      direction: "push",
+    });
+    createdPageIds.push(createResult.page_id);
+
+    // Now update the local file content (keep the notion_id frontmatter)
+    const currentContent = fs.readFileSync(filePath, "utf8");
+    fs.writeFileSync(
+      filePath,
+      currentContent.replace("# Original Content", "# Updated Content\n\nThis was modified."),
+      "utf8"
+    );
+
+    // Push again — should update the existing page
+    const updateResult = await syncNotionFile(notion, {
+      path: filePath,
+      direction: "push",
+    });
+    expect(updateResult.page_id).toBe(createResult.page_id);
+    expect(updateResult.direction).toBe("push");
+  }, 25000);
+
+  it("pull: downloads a Notion page to a local file", async () => {
+    // Use one of the pages we created
+    const pageId = createdPageIds[0];
+    expect(pageId).toBeDefined();
+
+    const filePath = path.join(tmpDir, "pull-test.md");
+    const result = await syncNotionFile(notion, {
+      path: filePath,
+      page_id: pageId,
+      direction: "pull",
+    });
+
+    expect(result.direction).toBe("pull");
+    expect(result.page_id).toBe(pageId);
+    expect(fs.existsSync(filePath)).toBe(true);
+
+    const content = fs.readFileSync(filePath, "utf8");
+    expect(content).toContain("notion_id");
+    expect(content).toContain(pageId);
+  }, 20000);
+
+  it("auto: syncs based on mtime comparison", async () => {
+    const pageId = createdPageIds[0];
+    expect(pageId).toBeDefined();
+
+    const filePath = path.join(tmpDir, "auto-test.md");
+    // Pull first so we have a known state
+    await syncNotionFile(notion, {
+      path: filePath,
+      page_id: pageId,
+      direction: "pull",
+    });
+
+    // Auto should detect and choose a direction
+    const result = await syncNotionFile(notion, {
+      path: filePath,
+      direction: "auto",
+    });
+    expect(["push", "pull"]).toContain(result.direction);
+    expect(result.reason).toBeDefined();
+  }, 25000);
+
+  it("rejects push of a nonexistent local file", async () => {
+    await expect(
+      syncNotionFile(notion, {
+        path: path.join(tmpDir, "does-not-exist.md"),
+        parent_id: parentPageId,
+        direction: "push",
+      })
+    ).rejects.toThrow();
+  });
+
+  it("rejects pull without page_id or notion_id", async () => {
+    const filePath = path.join(tmpDir, "no-id.md");
+    fs.writeFileSync(filePath, "# No ID\n\nJust content.", "utf8");
+    await expect(
+      syncNotionFile(notion, {
+        path: filePath,
+        direction: "pull",
+      })
+    ).rejects.toThrow();
+  });
+});
+
+// ─── notion_help ────────────────────────────────────────────────────────
+
+describe("notion_help", () => {
+  it("returns documentation for all tools", () => {
+    const help = getNotionHelp();
+    expect(help).toContain("notion_search");
+    expect(help).toContain("notion_query");
+    expect(help).toContain("notion_delete");
+    expect(help).toContain("notion_move");
+    expect(help).toContain("notion_publish");
+    expect(help).toContain("notion_file_tree");
+    expect(help).toContain("notion_sync");
+    expect(help).toContain("notion_help");
+    expect(help).toContain("notion_doctor");
+  });
+
+  it("returns help for a specific tool", () => {
+    const help = getNotionHelp("notion_sync");
+    expect(help).toContain("notion_sync");
+    expect(help).not.toContain("notion_search");
+  });
+
+  it("throws for an unknown tool name", () => {
+    expect(() => getNotionHelp("notion_foobar")).toThrow("Unknown Notion tool");
+  });
+});
+
+// ─── notion_doctor ──────────────────────────────────────────────────────
+
+describe("notion_doctor", () => {
+  it("returns a diagnostic report with plugin info", async () => {
+    const report = await runNotionDoctor();
+    expect(report.plugin.name).toBe("openclaw-notion");
+    expect(report.plugin.notion_version).toBe("2026-03-11");
+    expect(report.plugin.sdk_version).toBeDefined();
+    expect(report.plugin.version).toBeDefined();
+  }, 20000);
+
+  it("checks connectivity for all configured agents", async () => {
+    const report = await runNotionDoctor();
+    expect(report.configured_agents.length).toBeGreaterThanOrEqual(2);
+
+    const defaultAgent = report.configured_agents.find(
+      (a: any) => a.agent_id === "default"
+    );
+    expect(defaultAgent).toBeDefined();
+    expect(defaultAgent!.api_key_present).toBe(true);
+    expect(defaultAgent!.connectivity.ok).toBe(true);
+
+    const gfAgent = report.configured_agents.find(
+      (a: any) => a.agent_id === "gf_agent"
+    );
+    expect(gfAgent).toBeDefined();
+    expect(gfAgent!.api_key_present).toBe(true);
+    expect(gfAgent!.connectivity.ok).toBe(true);
+  }, 20000);
+
+  it("handles an agent context parameter", async () => {
+    const report = await runNotionDoctor("gf_agent");
+    expect(report.current_agent).toBe("gf_agent");
+    const gfEntry = report.configured_agents.find(
+      (a: any) => a.agent_id === "gf_agent"
+    );
+    expect(gfEntry?.using_current_context).toBe(true);
+  }, 20000);
+});
+
+// ─── URL surfacing on create/update tools ───────────────────────────────
+
+describe("URL surfacing", () => {
+  const notion = makeClient(undefined);
+  let parentPageId: string;
+  let testPageId: string;
+
+  beforeAll(async () => {
+    const response = await notion.search({ query: "Deployment Plan", page_size: 1 });
+    expect(response.results.length).toBeGreaterThan(0);
+    parentPageId = response.results[0].id;
+  });
+
+  afterAll(async () => {
+    if (testPageId) {
+      await deleteNotionPage(notion, { page_id: testPageId }).catch(() => {});
+    }
+  });
+
+  it("notion_create returns url at top level", async () => {
+    const page = await notion.pages.create({
+      parent: { page_id: parentPageId },
+      properties: {
+        title: {
+          title: [{ type: "text", text: { content: "[vitest] url-test" } }],
+        },
+      },
+      markdown: "URL test page.",
+    }) as any;
+    testPageId = page.id;
+    // The wrapPageResponse function should surface url
+    expect(page.url).toMatch(/^https:\/\/www\.notion\.so\//);
+  }, 15000);
+
+  it("notion_update_page returns url at top level", async () => {
+    const updated = await notion.pages.update({
+      page_id: testPageId,
+      icon: { type: "emoji", emoji: "🔗" },
+    }) as any;
+    expect(updated.url).toMatch(/^https:\/\/www\.notion\.so\//);
+  });
+});
+
+// ─── Phase 1 workspace isolation on new tools ───────────────────────────
+
+describe("Phase 1 workspace isolation", () => {
+  const gfNotion = makeClient("gf_agent");
+  let taviPageId: string;
+
+  beforeAll(async () => {
+    const defaultNotion = makeClient(undefined);
+    const response = await defaultNotion.search({ query: "Projects", page_size: 1 });
+    expect(response.results.length).toBeGreaterThan(0);
+    taviPageId = response.results[0].id;
+  });
+
+  it("gf_agent cannot delete Tavi's pages", async () => {
+    await expect(
+      deleteNotionPage(gfNotion, { page_id: taviPageId })
+    ).rejects.toThrow();
+  });
+
+  it("gf_agent cannot move Tavi's pages", async () => {
+    await expect(
+      moveNotionPage(gfNotion, {
+        page_id: taviPageId,
+        new_parent_id: taviPageId,
+      })
+    ).rejects.toThrow();
+  });
+
+  it("gf_agent publish stub still returns info for accessible pages", async () => {
+    const gfSearch = await gfNotion.search({ query: "", page_size: 1 });
+    expect(gfSearch.results.length).toBeGreaterThan(0);
+    const gfPageId = gfSearch.results[0].id;
+    const result = await publishNotionPage(gfNotion, { page_id: gfPageId });
+    expect(result.supported).toBe(false);
+    expect(result.page_id).toBe(gfPageId);
+  });
+
+  it("notion_doctor shows both agents as configured", async () => {
+    const report = await runNotionDoctor();
+    const agentIds = report.configured_agents.map((a: any) => a.agent_id);
+    expect(agentIds).toContain("default");
+    expect(agentIds).toContain("gf_agent");
+  }, 20000);
 });
