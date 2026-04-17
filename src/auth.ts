@@ -3,22 +3,33 @@ import * as path from 'node:path';
 import * as os from 'node:os';
 
 /**
- * Retrieves the Notion API key from the local filesystem.
+ * Retrieves the Notion API key from the local filesystem based on the agent context.
  * 
- * OpenClaw environments typically store API keys in the user's home directory.
- * This utility reads the file at `~/.config/notion/api_key` synchronously.
+ * It first attempts to load an agent-specific key (e.g., `~/.config/notion/api_key_gf_agent`).
+ * If not found or no agentId is provided, it falls back to the default `~/.config/notion/api_key`.
  * 
+ * @param {string} [agentId] The ID of the OpenClaw agent executing the tool.
  * @returns {string} The trimmed Notion API key.
- * @throws {Error} If the file does not exist, lacks read permissions, or is empty.
+ * @throws {Error} If the key file cannot be read.
  */
-export function getNotionApiKey(): string {
-  // Resolve the absolute path to the configuration file
-  const keyPath = path.join(os.homedir(), '.config', 'notion', 'api_key');
+export function getNotionApiKey(agentId?: string): string {
+  const configDir = path.join(os.homedir(), '.config', 'notion');
   
+  if (agentId) {
+    const agentKeyPath = path.join(configDir, `api_key_${agentId}`);
+    try {
+      if (fs.existsSync(agentKeyPath)) {
+        return fs.readFileSync(agentKeyPath, 'utf8').trim();
+      }
+    } catch (error: any) {
+      // Ignore read errors for the agent-specific key and fall back
+    }
+  }
+
+  const defaultKeyPath = path.join(configDir, 'api_key');
   try {
-    // Read and trim to ensure no trailing newlines cause authentication failures
-    return fs.readFileSync(keyPath, 'utf8').trim();
+    return fs.readFileSync(defaultKeyPath, 'utf8').trim();
   } catch (error: any) {
-    throw new Error(`Failed to read Notion API key from ${keyPath}: ${error.message}`);
+    throw new Error(`Failed to read Notion API key from ${defaultKeyPath}: ${error.message}`);
   }
 }

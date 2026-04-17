@@ -2,39 +2,27 @@ import { Client } from '@notionhq/client';
 import { getNotionApiKey } from './auth';
 
 /**
- * Cached instance of the Notion SDK Client.
- * Prevents re-instantiating the client and re-reading the auth token on every tool call.
+ * Cached instances of the Notion SDK Client, keyed by agentId (or 'default').
+ * Prevents re-instantiating the client on every tool call.
  */
-let notionClient: Client | null = null;
+const clients = new Map<string, Client>();
 
 /**
- * Initializes and retrieves the Notion SDK Client.
- * Automatically loads the authentication key from the local environment.
+ * Initializes and retrieves the Notion SDK Client for a given agent.
+ * Automatically loads the authentication key, prioritizing agent-specific keys.
  * 
+ * @param {string} [agentId] The OpenClaw agent ID.
  * @returns {Client} An authenticated Notion Client instance.
  */
-function getClient(): Client {
-  if (!notionClient) {
-    notionClient = new Client({ auth: getNotionApiKey() });
+function getClient(agentId?: string): Client {
+  const cacheKey = agentId || 'default';
+  if (!clients.has(cacheKey)) {
+    clients.set(cacheKey, new Client({ auth: getNotionApiKey(agentId) }));
   }
-  return notionClient;
+  return clients.get(cacheKey)!;
 }
 
-/**
- * OpenClaw Tool Definitions
- * 
- * These definitions conform to the OpenClaw plugin specification. 
- * They map native agent tool calls directly to Notion API actions, 
- * bypassing the need for intermediate shell scripts or raw HTTP requests.
- */
 export const tools = {
-  
-  /**
-   * notion_search
-   * 
-   * Searches the entire connected Notion workspace.
-   * Useful for finding page IDs needed for reading or appending.
-   */
   notion_search: {
     description: 'Search the Notion workspace for pages or databases. Returns matching items with their IDs.',
     parameters: {
@@ -47,25 +35,16 @@ export const tools = {
       },
       required: ['query']
     },
-    execute: async (args: { query: string }) => {
-      const notion = getClient();
-      
-      // Perform a search across the workspace, limiting to top 10 to avoid token bloat
+    execute: async (args: { query: string }, context?: any) => {
+      const notion = getClient(context?.agentId);
       const response = await notion.search({
         query: args.query,
         page_size: 10,
       });
-      
       return JSON.stringify(response.results, null, 2);
     }
   },
 
-  /**
-   * notion_read
-   * 
-   * Fetches the raw block contents of a specific page.
-   * This is the designated replacement for attempting to use `web_fetch` on notion.so URLs.
-   */
   notion_read: {
     description: 'Read the raw block contents of a Notion page using its UUID.',
     parameters: {
@@ -73,29 +52,20 @@ export const tools = {
       properties: {
         page_id: {
           type: 'STRING',
-          description: 'The UUID of the Notion page to read (can be extracted from the URL or search results).'
+          description: 'The UUID of the Notion page to read.'
         }
       },
       required: ['page_id']
     },
-    execute: async (args: { page_id: string }) => {
-      const notion = getClient();
-      
-      // Fetch the immediate children blocks of the specified page
+    execute: async (args: { page_id: string }, context?: any) => {
+      const notion = getClient(context?.agentId);
       const response = await notion.blocks.children.list({
         block_id: args.page_id,
       });
-      
       return JSON.stringify(response.results, null, 2);
     }
   },
 
-  /**
-   * notion_append
-   * 
-   * Appends simple text as a new paragraph block at the bottom of a page.
-   * Ideal for quick captures, inbox routing, or logging.
-   */
   notion_append: {
     description: 'Append a simple text paragraph block to the bottom of a Notion page.',
     parameters: {
@@ -112,10 +82,8 @@ export const tools = {
       },
       required: ['page_id', 'text']
     },
-    execute: async (args: { page_id: string, text: string }) => {
-      const notion = getClient();
-      
-      // Append a single paragraph block containing the requested text
+    execute: async (args: { page_id: string, text: string }, context?: any) => {
+      const notion = getClient(context?.agentId);
       const response = await notion.blocks.children.append({
         block_id: args.page_id,
         children: [
@@ -135,7 +103,6 @@ export const tools = {
           },
         ],
       });
-      
       return JSON.stringify(response.results, null, 2);
     }
   }
