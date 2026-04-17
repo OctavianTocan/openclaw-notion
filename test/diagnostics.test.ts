@@ -1,3 +1,8 @@
+/**
+ * Tests for notion_help, notion_doctor, URL surfacing, and cross-agent
+ * workspace isolation on destructive operations.
+ */
+
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import {
   deleteNotionPage,
@@ -7,6 +12,8 @@ import {
   runNotionDoctor,
 } from '../src/index.js';
 import { makeClient } from './helpers.js';
+
+const SECONDARY_AGENT = process.env.NOTION_SECONDARY_AGENT ?? 'secondary';
 
 type DoctorAgentReport = {
   agent_id: string;
@@ -68,19 +75,19 @@ describe('notion_doctor', () => {
     expect(defaultAgent?.api_key_present).toBe(true);
     expect(defaultAgent?.connectivity.ok).toBe(true);
 
-    const gfAgent = report.configured_agents.find(
-      (entry): entry is DoctorAgentReport => entry.agent_id === 'gf_agent'
+    const secondaryAgent = report.configured_agents.find(
+      (entry): entry is DoctorAgentReport => entry.agent_id === SECONDARY_AGENT
     );
-    expect(gfAgent?.api_key_present).toBe(true);
-    expect(gfAgent?.connectivity.ok).toBe(true);
+    expect(secondaryAgent?.api_key_present).toBe(true);
+    expect(secondaryAgent?.connectivity.ok).toBe(true);
   }, 20000);
 
   it('handles an agent context parameter', async () => {
-    const report = await runNotionDoctor('gf_agent');
-    expect(report.current_agent).toBe('gf_agent');
+    const report = await runNotionDoctor(SECONDARY_AGENT);
+    expect(report.current_agent).toBe(SECONDARY_AGENT);
     expect(
       report.configured_agents.find(
-        (entry): entry is DoctorAgentReport => entry.agent_id === 'gf_agent'
+        (entry): entry is DoctorAgentReport => entry.agent_id === SECONDARY_AGENT
       )?.using_current_context
     ).toBe(true);
   }, 20000);
@@ -122,35 +129,39 @@ describe('URL surfacing', () => {
   });
 });
 
-describe('Phase 1 workspace isolation', () => {
-  const gfNotion = makeClient('gf_agent');
-  let taviPageId: string;
+describe('Cross-agent workspace isolation (destructive ops)', () => {
+  const secondaryNotion = makeClient(SECONDARY_AGENT);
+  let defaultPageId: string;
 
   beforeAll(async () => {
-    taviPageId = (await makeClient(undefined).search({ query: 'Projects', page_size: 1 }))
+    defaultPageId = (await makeClient(undefined).search({ query: 'Projects', page_size: 1 }))
       .results[0].id;
   });
 
-  it("gf_agent cannot delete Tavi's pages", async () => {
-    await expect(deleteNotionPage(gfNotion, { page_id: taviPageId })).rejects.toThrow();
+  it('secondary agent cannot delete pages from the default workspace', async () => {
+    await expect(deleteNotionPage(secondaryNotion, { page_id: defaultPageId })).rejects.toThrow();
   });
 
-  it("gf_agent cannot move Tavi's pages", async () => {
+  it('secondary agent cannot move pages from the default workspace', async () => {
     await expect(
-      moveNotionPage(gfNotion, { page_id: taviPageId, new_parent_id: taviPageId })
+      moveNotionPage(secondaryNotion, {
+        page_id: defaultPageId,
+        new_parent_id: defaultPageId,
+      })
     ).rejects.toThrow();
   });
 
-  it('gf_agent publish stub still returns info for accessible pages', async () => {
-    const gfPageId = (await gfNotion.search({ query: '', page_size: 1 })).results[0].id;
-    const result = await publishNotionPage(gfNotion, { page_id: gfPageId });
+  it('publish stub returns info for pages the secondary agent can access', async () => {
+    const secondaryPageId = (await secondaryNotion.search({ query: '', page_size: 1 })).results[0]
+      .id;
+    const result = await publishNotionPage(secondaryNotion, { page_id: secondaryPageId });
     expect(result.supported).toBe(false);
-    expect(result.page_id).toBe(gfPageId);
+    expect(result.page_id).toBe(secondaryPageId);
   });
 
-  it('notion_doctor shows both agents as configured', async () => {
+  it('notion_doctor discovers both agents as configured', async () => {
     const agentIds = (await runNotionDoctor()).configured_agents.map((entry) => entry.agent_id);
     expect(agentIds).toContain('default');
-    expect(agentIds).toContain('gf_agent');
+    expect(agentIds).toContain(SECONDARY_AGENT);
   }, 20000);
 });

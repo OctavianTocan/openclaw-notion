@@ -1,13 +1,19 @@
+/**
+ * API key resolution and per-agent isolation tests.
+ */
+
 import { describe, expect, it } from 'vitest';
 import { getNotionApiKey } from '../src/auth.js';
 
+const SECONDARY_AGENT = process.env.NOTION_SECONDARY_AGENT ?? 'secondary';
+
 describe('Key isolation', () => {
-  it('default and gf_agent resolve to different API keys', () => {
+  it('default and secondary agents resolve to different API keys', () => {
     const defaultKey = getNotionApiKey(undefined);
-    const gfKey = getNotionApiKey('gf_agent');
-    expect(defaultKey).not.toBe(gfKey);
+    const secondaryKey = getNotionApiKey(SECONDARY_AGENT);
+    expect(defaultKey).not.toBe(secondaryKey);
     expect(defaultKey.length).toBeGreaterThan(10);
-    expect(gfKey.length).toBeGreaterThan(10);
+    expect(secondaryKey.length).toBeGreaterThan(10);
   });
 
   it("explicitly passing 'main' falls back to the default key", () => {
@@ -22,7 +28,7 @@ describe('Key isolation', () => {
     const hasValidPrefix = (value: string) =>
       value.startsWith('ntn_') || value.startsWith('secret_');
     expect(hasValidPrefix(getNotionApiKey(undefined))).toBe(true);
-    expect(hasValidPrefix(getNotionApiKey('gf_agent'))).toBe(true);
+    expect(hasValidPrefix(getNotionApiKey(SECONDARY_AGENT))).toBe(true);
   });
 
   it('repeated reads return the same default key', () => {

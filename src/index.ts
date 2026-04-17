@@ -3,8 +3,7 @@
  *
  * Registers 18 Notion tools with the OpenClaw plugin SDK. Each tool
  * resolves an agent-scoped Notion client via {@link getClient}, ensuring
- * workspace isolation between agents (e.g. Wretch → Tavi's workspace,
- * Alaric → Esther's workspace).
+ * workspace isolation between agents.
  *
  * @module
  */

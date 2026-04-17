@@ -153,9 +153,10 @@ describe('notion_file_tree', () => {
     }
   }, 30000);
 
-  it("gf_agent cannot enumerate Tavi's pages", async () => {
+  it('secondary agent cannot enumerate pages from the default workspace', async () => {
+    const secondaryAgent = process.env.NOTION_SECONDARY_AGENT ?? 'secondary';
     await expect(
-      getNotionFileTree(makeClient('gf_agent'), { page_id: rootPageId, max_depth: 1 })
+      getNotionFileTree(makeClient(secondaryAgent), { page_id: rootPageId, max_depth: 1 })
     ).rejects.toThrow();
   });
 });

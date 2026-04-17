@@ -88,7 +88,9 @@ jobs:
         run: |
           mkdir -p ~/.config/notion
           echo "${{ secrets.NOTION_API_KEY }}" > ~/.config/notion/api_key
-          echo "${{ secrets.NOTION_API_KEY_GF_AGENT }}" > ~/.config/notion/api_key_gf_agent
+          echo "${{ secrets.NOTION_API_KEY_SECONDARY }}" > ~/.config/notion/api_key_secondary
 
       - name: Run tests
         run: pnpm test
+        env:
+          NOTION_SECONDARY_AGENT: secondary

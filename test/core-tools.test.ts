@@ -34,7 +34,7 @@ function requirePageId(pageId: string | undefined): string {
   return pageId;
 }
 
-describe('Default agent (Wretch / Tavi)', () => {
+describe('Default agent', () => {
   const notion = makeClient(undefined);
   let testPageId: string;
   let deploymentPlanId: string;

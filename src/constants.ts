@@ -11,7 +11,7 @@ export const NOTION_VERSION = '2026-03-11';
 export const DEFAULT_PAGE_SIZE = 100;
 
 /**
- * Agent IDs the plugin recognises out of the box.
- * Additional agents are discovered at runtime by scanning `~/.config/notion/api_key_*` files.
+ * Baseline agent IDs the plugin recognises before scanning disk.
+ * Additional agents are discovered at runtime from `~/.config/notion/api_key_*` files.
  */
-export const KNOWN_AGENT_IDS = ['default', 'gf_agent'] as const;
+export const KNOWN_AGENT_IDS = ['default'] as const;

@@ -7,8 +7,8 @@
  * 1. `~/.config/notion/api_key_{agentId}` (agent-specific)
  * 2. `~/.config/notion/api_key` (shared fallback)
  *
- * This guarantees workspace isolation: Alaric (gf_agent) hits Esther's
- * workspace while Wretch (main / default) hits Tavi's.
+ * This guarantees workspace isolation: each agent hits its own Notion
+ * workspace and cannot access pages belonging to other agents.
  */
 
 import * as fs from 'node:fs';
