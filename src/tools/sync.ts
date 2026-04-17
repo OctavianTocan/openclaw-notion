@@ -14,21 +14,14 @@ import { promises as fsp } from 'node:fs';
 import * as path from 'node:path';
 import type { Client } from '@notionhq/client';
 import matter from 'gray-matter';
+import { getMarkdownPagesApi } from '../client.js';
 import {
   extractPageTitle,
   findTitlePropertyName,
   isRecord,
   retrievePageMetadata,
 } from '../helpers.js';
-import type { AnyPage, LocalFileState, MarkdownPageApi, SyncParams } from '../types.js';
-
-/**
- * Cast the Notion client's `pages` namespace to the enhanced markdown API.
- *
- * @param notion - Authenticated Notion client.
- * @returns A handle exposing `retrieveMarkdown` and `updateMarkdown`.
- */
-const getMarkdownPagesApi = (notion: Client) => notion.pages as unknown as MarkdownPageApi;
+import type { AnyPage, LocalFileState, SyncParams } from '../types.js';
 
 /**
  * Read and parse a local markdown file, extracting frontmatter and stats.
@@ -267,7 +260,11 @@ async function pullRemotePage(
     notion_id: page.id,
     title: extractPageTitle(page),
   };
-  await writeMarkdownFile(localState.absolutePath, String(markdownPage.markdown ?? ''), mergedData);
+  const markdown = markdownPage.markdown;
+  if (typeof markdown !== 'string') {
+    throw new Error('Expected markdownPage.markdown to be a string');
+  }
+  await writeMarkdownFile(localState.absolutePath, markdown, mergedData);
   const refreshedStat = await fsp.stat(localState.absolutePath);
 
   return {
@@ -291,7 +288,16 @@ export async function syncNotionFile(notion: Client, params: SyncParams) {
       ? localState.data.notion_id.trim()
       : undefined;
   const pageId = params.page_id ?? frontmatterPageId;
-  const remotePage = pageId ? await retrievePageMetadata(notion, pageId) : null;
+  let remotePage: AnyPage | null = null;
+  if (pageId) {
+    try {
+      remotePage = await retrievePageMetadata(notion, pageId);
+    } catch {
+      // Page may have been deleted or the ID may be stale.
+      // Let resolveSyncDirection handle the missing-remote case.
+      remotePage = null;
+    }
+  }
 
   const { chosenDirection, reason } = resolveSyncDirection(
     params.direction,

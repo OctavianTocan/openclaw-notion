@@ -99,7 +99,9 @@ describe('URL surfacing', () => {
   let testPageId: string;
 
   beforeAll(async () => {
-    parentPageId = (await notion.search({ query: 'Deployment Plan', page_size: 1 })).results[0].id;
+    const results = (await notion.search({ query: 'Deployment Plan', page_size: 1 })).results;
+    expect(results.length).toBeGreaterThan(0);
+    parentPageId = results[0].id;
   });
 
   afterAll(async () => {
@@ -134,8 +136,10 @@ describe('Cross-agent workspace isolation (destructive ops)', () => {
   let defaultPageId: string;
 
   beforeAll(async () => {
-    defaultPageId = (await makeClient(undefined).search({ query: 'Projects', page_size: 1 }))
-      .results[0].id;
+    const results = (await makeClient(undefined).search({ query: 'Projects', page_size: 1 }))
+      .results;
+    expect(results.length).toBeGreaterThan(0);
+    defaultPageId = results[0].id;
   });
 
   it('secondary agent cannot delete pages from the default workspace', async () => {

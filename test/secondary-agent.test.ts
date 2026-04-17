@@ -55,7 +55,9 @@ describe(`Secondary agent (${SECONDARY_AGENT})`, () => {
 
   describe('notion_read', () => {
     beforeAll(async () => {
-      testPageId = (await notion.search({ query: '', page_size: 1 })).results[0].id;
+      const results = (await notion.search({ query: '', page_size: 1 })).results;
+      expect(results.length).toBeGreaterThan(0);
+      testPageId = results[0].id;
     });
 
     it('reads blocks from the secondary workspace', async () => {

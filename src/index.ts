@@ -10,7 +10,7 @@
 
 import { Type } from '@sinclair/typebox';
 import { definePluginEntry } from 'openclaw/plugin-sdk/plugin-entry';
-import { getClient } from './client.js';
+import { getClient, getMarkdownPagesApi } from './client.js';
 import { DEFAULT_PAGE_SIZE } from './constants.js';
 import { asJsonContent, asTextContent, wrapPageResponse } from './format.js';
 import { findTitlePropertyName } from './helpers.js';
@@ -20,10 +20,10 @@ import { getNotionHelp } from './tools/help.js';
 import { deleteNotionPage, moveNotionPage, publishNotionPage } from './tools/pages.js';
 import { queryNotionDatabase } from './tools/query.js';
 import { syncNotionFile } from './tools/sync.js';
-import type { AnyPage, MarkdownPageApi, SyncParams } from './types.js';
+import type { AnyPage, SyncParams } from './types.js';
 
 // ── Re-exports for test access ──────────────────────────────────────────
-export { getClient } from './client.js';
+export { getClient, getMarkdownPagesApi } from './client.js';
 export { NOTION_VERSION } from './constants.js';
 export { runNotionDoctor } from './tools/doctor.js';
 export { getNotionFileTree } from './tools/file-tree.js';
@@ -45,18 +45,6 @@ const textBlock = (text: string) => ({
     rich_text: [{ type: 'text' as const, text: { content: text } }],
   },
 });
-
-/**
- * Cast the Notion client's `pages` namespace to the enhanced markdown API.
- *
- * The 2026-03-11 Notion API version exposes `retrieveMarkdown` and
- * `updateMarkdown`, but the SDK types have not caught up yet.
- *
- * @param agentId - Agent whose client to use.
- * @returns A handle exposing the markdown-specific page methods.
- */
-const getMarkdownPagesApi = (agentId?: string) =>
-  getClient(agentId).pages as typeof getClient extends never ? never : MarkdownPageApi;
 
 // ── Plugin definition ───────────────────────────────────────────────────
 
@@ -157,7 +145,9 @@ export default definePluginEntry({
       }),
       async execute(_id, params) {
         return asJsonContent(
-          await getMarkdownPagesApi(ctx.agentId).retrieveMarkdown({ page_id: params.page_id })
+          await getMarkdownPagesApi(getClient(ctx.agentId)).retrieveMarkdown({
+            page_id: params.page_id,
+          })
         );
       },
     }));
@@ -173,7 +163,7 @@ export default definePluginEntry({
       }),
       async execute(_id, params) {
         const notion = getClient(ctx.agentId);
-        const response = await getMarkdownPagesApi(ctx.agentId).updateMarkdown({
+        const response = await getMarkdownPagesApi(getClient(ctx.agentId)).updateMarkdown({
           page_id: params.page_id,
           type: 'replace_content',
           replace_content: { new_str: params.content },

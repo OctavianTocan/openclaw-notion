@@ -10,6 +10,7 @@
 import { Client } from '@notionhq/client';
 import { getNotionApiKey } from './auth.js';
 import { NOTION_VERSION } from './constants.js';
+import type { MarkdownPageApi } from './types.js';
 
 /** One `Client` per agent, keyed by agentId (or "default"). */
 const clients = new Map<string, Client>();
@@ -33,4 +34,17 @@ export function getClient(agentId?: string): Client {
   });
   clients.set(cacheKey, client);
   return client;
+}
+
+/**
+ * Cast a Notion client's `pages` namespace to the enhanced markdown API.
+ *
+ * The 2026-03-11 Notion API version exposes `retrieveMarkdown` and
+ * `updateMarkdown`, but the SDK types have not caught up yet.
+ *
+ * @param notion - Authenticated Notion client.
+ * @returns A handle exposing the markdown-specific page methods.
+ */
+export function getMarkdownPagesApi(notion: Client): MarkdownPageApi {
+  return notion.pages as unknown as MarkdownPageApi;
 }

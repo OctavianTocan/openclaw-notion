@@ -12,7 +12,9 @@ describe('notion_sync', () => {
   let tmpDir: string;
 
   beforeAll(async () => {
-    parentPageId = (await notion.search({ query: 'Deployment Plan', page_size: 1 })).results[0].id;
+    const results = (await notion.search({ query: 'Deployment Plan', page_size: 1 })).results;
+    expect(results.length).toBeGreaterThan(0);
+    parentPageId = results[0].id;
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'notion-sync-test-'));
   });
 
@@ -20,7 +22,9 @@ describe('notion_sync', () => {
     for (const id of createdPageIds) {
       await deleteNotionPage(notion, { page_id: id }).catch(() => {});
     }
-    fs.rmSync(tmpDir, { recursive: true, force: true });
+    if (tmpDir) {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
   }, 15000);
 
   it('push: creates a new Notion page from a local file', async () => {

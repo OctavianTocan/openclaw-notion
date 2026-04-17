@@ -19,7 +19,9 @@ describe('notion_delete', () => {
   let parentPageId: string;
 
   beforeAll(async () => {
-    parentPageId = (await notion.search({ query: 'Deployment Plan', page_size: 1 })).results[0].id;
+    const results = (await notion.search({ query: 'Deployment Plan', page_size: 1 })).results;
+    expect(results.length).toBeGreaterThan(0);
+    parentPageId = results[0].id;
   });
 
   it('creates a page then trashes it', async () => {
@@ -49,7 +51,9 @@ describe('notion_move', () => {
   let movePageId: string;
 
   beforeAll(async () => {
-    parentPageId = (await notion.search({ query: 'Deployment Plan', page_size: 1 })).results[0].id;
+    const results = (await notion.search({ query: 'Deployment Plan', page_size: 1 })).results;
+    expect(results.length).toBeGreaterThan(0);
+    parentPageId = results[0].id;
     secondParentId = (
       (await notion.pages.create({
         parent: { page_id: parentPageId },
@@ -76,8 +80,12 @@ describe('notion_move', () => {
   }, 20000);
 
   afterAll(async () => {
-    await deleteNotionPage(notion, { page_id: movePageId }).catch(() => {});
-    await deleteNotionPage(notion, { page_id: secondParentId }).catch(() => {});
+    if (movePageId) {
+      await deleteNotionPage(notion, { page_id: movePageId }).catch(() => {});
+    }
+    if (secondParentId) {
+      await deleteNotionPage(notion, { page_id: secondParentId }).catch(() => {});
+    }
   });
 
   it('moves a page to a new parent', async () => {
@@ -101,7 +109,9 @@ describe('notion_publish', () => {
   let testPageId: string;
 
   beforeAll(async () => {
-    testPageId = (await notion.search({ query: 'Projects', page_size: 1 })).results[0].id;
+    const results = (await notion.search({ query: 'Projects', page_size: 1 })).results;
+    expect(results.length).toBeGreaterThan(0);
+    testPageId = results[0].id;
   });
 
   it('returns a stub report with supported=false', async () => {
@@ -125,7 +135,9 @@ describe('notion_file_tree', () => {
   let rootPageId: string;
 
   beforeAll(async () => {
-    rootPageId = (await notion.search({ query: 'Projects', page_size: 1 })).results[0].id;
+    const results = (await notion.search({ query: 'Projects', page_size: 1 })).results;
+    expect(results.length).toBeGreaterThan(0);
+    rootPageId = results[0].id;
   });
 
   it('returns a tree structure with title, id, url, type, children', async () => {

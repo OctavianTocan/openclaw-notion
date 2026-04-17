@@ -78,7 +78,9 @@ describe('Default agent', () => {
 
   describe('notion_read', () => {
     beforeAll(async () => {
-      testPageId = (await notion.search({ query: 'Projects', page_size: 1 })).results[0].id;
+      const results = (await notion.search({ query: 'Projects', page_size: 1 })).results;
+      expect(results.length).toBeGreaterThan(0);
+      testPageId = results[0].id;
     });
 
     it('reads blocks from a known page', async () => {
@@ -108,8 +110,9 @@ describe('Default agent', () => {
     let appendTargetId: string;
 
     beforeAll(async () => {
-      appendTargetId = (await notion.search({ query: 'Deployment Plan', page_size: 1 })).results[0]
-        .id;
+      const results = (await notion.search({ query: 'Deployment Plan', page_size: 1 })).results;
+      expect(results.length).toBeGreaterThan(0);
+      appendTargetId = results[0].id;
     });
 
     it('appends a paragraph block to a page', async () => {
@@ -135,8 +138,9 @@ describe('Default agent', () => {
     let newPageId: string | undefined;
 
     beforeAll(async () => {
-      deploymentPlanId = (await notion.search({ query: 'Deployment Plan', page_size: 1 }))
-        .results[0].id;
+      const results = (await notion.search({ query: 'Deployment Plan', page_size: 1 })).results;
+      expect(results.length).toBeGreaterThan(0);
+      deploymentPlanId = results[0].id;
     }, 20000);
 
     afterAll(async () => {
