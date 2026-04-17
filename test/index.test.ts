@@ -17,7 +17,10 @@ import { getNotionApiKey } from "../src/auth.js";
  */
 
 function makeClient(agentId?: string): Client {
-  return new Client({ auth: getNotionApiKey(agentId) });
+  return new Client({
+    auth: getNotionApiKey(agentId),
+    notionVersion: "2026-03-11",
+  });
 }
 
 // ─── Key Isolation ──────────────────────────────────────────────────────
@@ -57,6 +60,7 @@ describe("Key isolation", () => {
 describe("Default agent (Wretch / Tavi)", () => {
   const notion = makeClient(undefined);
   let testPageId: string;
+  let deploymentPlanId: string;
 
   describe("notion_search", () => {
     it("returns results for empty query (list pages)", async () => {
@@ -99,7 +103,7 @@ describe("Default agent (Wretch / Tavi)", () => {
       expect(response.results).toBeDefined();
       expect(Array.isArray(response.results)).toBe(true);
       // Might return 0 or some fuzzy matches, either is fine
-    });
+    }, 15000);
   });
 
   describe("notion_read", () => {
@@ -165,6 +169,110 @@ describe("Default agent (Wretch / Tavi)", () => {
       const block = response.results[0] as any;
       expect(block.type).toBe("paragraph");
       expect(block.paragraph.rich_text[0].plain_text).toBe(testText);
+    }, 15000);
+  });
+
+  describe("markdown and comments", () => {
+    let newPageId: string | undefined;
+
+    beforeAll(async () => {
+      const response = await notion.search({ query: "Deployment Plan", page_size: 1 });
+      expect(response.results.length).toBeGreaterThan(0);
+      deploymentPlanId = response.results[0].id;
+    }, 20000);
+
+    it("creates a page with markdown under Deployment Plan", async () => {
+      const page = await notion.pages.create({
+        parent: { page_id: deploymentPlanId },
+        properties: {
+          title: {
+            title: [{ type: "text", text: { content: "Test Page" } }],
+          },
+        },
+        markdown:
+          "This is a **test** created by vitest.\n\n- Item 1\n- Item 2\n\n```js\nconsole.log('hello');\n```",
+      });
+
+      expect(page.id).toBeDefined();
+      expect(page.object).toBe("page");
+      newPageId = page.id;
+    });
+
+    it("retrieves the created page as markdown", async () => {
+      expect(newPageId).toBeDefined();
+
+      const md = await notion.pages.retrieveMarkdown({ page_id: newPageId! });
+
+      expect(md.object).toBe("page_markdown");
+      expect(md.markdown).toContain("This is a **test** created by vitest.");
+    });
+
+    it("updates page content via replace_content markdown", async () => {
+      expect(newPageId).toBeDefined();
+
+      const updated = await notion.pages.updateMarkdown({
+        page_id: newPageId!,
+        type: "replace_content",
+        replace_content: { new_str: "# Updated Title\n\nNew content here." },
+      });
+
+      expect(updated.object).toBe("page_markdown");
+      expect(updated.markdown).toContain("Updated Title");
+      expect(updated.markdown).toContain("New content here.");
+    });
+
+    it("updates page title and icon", async () => {
+      expect(newPageId).toBeDefined();
+
+      const updated = await notion.pages.update({
+        page_id: newPageId!,
+        icon: { type: "emoji", emoji: "🧪" },
+        properties: {
+          title: {
+            title: [{ type: "text", text: { content: "Renamed Test Page" } }],
+          },
+        },
+      });
+
+      expect(updated.object).toBe("page");
+      expect((updated as any).icon?.type).toBe("emoji");
+      expect((updated as any).icon?.emoji).toBe("🧪");
+      expect((updated as any).properties?.title?.title?.[0]?.plain_text).toBe(
+        "Renamed Test Page"
+      );
+    });
+
+    it("creates and lists comments for the test page", async () => {
+      expect(newPageId).toBeDefined();
+
+      const comment = await notion.comments.create({
+        parent: { page_id: newPageId! },
+        rich_text: [
+          { type: "text", text: { content: "Test comment from vitest" } },
+        ],
+      });
+      expect(comment.object).toBe("comment");
+
+      const comments = await notion.comments.list({ block_id: newPageId! });
+      expect(comments.object).toBe("list");
+      expect(
+        comments.results.some((entry) =>
+          entry.rich_text.some(
+            (item) => item.plain_text === "Test comment from vitest"
+          )
+        )
+      ).toBe(true);
+    });
+
+    it("trashes the markdown test page for cleanup", async () => {
+      expect(newPageId).toBeDefined();
+
+      const trashed = await notion.pages.update({
+        page_id: newPageId!,
+        in_trash: true,
+      });
+
+      expect((trashed as any).in_trash || (trashed as any).archived).toBe(true);
     });
   });
 });
@@ -219,6 +327,26 @@ describe("gf_agent (Alaric / Esther)", () => {
       const taviPageId = "dcc09ec2-11b3-4a95-8118-daede10eef1d"; // "01 — Projects"
       await expect(
         notion.blocks.children.list({ block_id: taviPageId })
+      ).rejects.toThrow();
+    });
+
+    it("can read one of Esther's pages as markdown", async () => {
+      const response = await notion.search({ query: "", page_size: 1 });
+      expect(response.results.length).toBeGreaterThan(0);
+
+      const markdown = await notion.pages.retrieveMarkdown({
+        page_id: response.results[0].id,
+      });
+
+      expect(markdown.object).toBe("page_markdown");
+      expect(typeof markdown.markdown).toBe("string");
+      expect(markdown.markdown.length).toBeGreaterThan(0);
+    });
+
+    it("cannot read Tavi's pages as markdown with gf_agent key", async () => {
+      const taviPageId = "dcc09ec2-11b3-4a95-8118-daede10eef1d"; // "01 — Projects"
+      await expect(
+        notion.pages.retrieveMarkdown({ page_id: taviPageId })
       ).rejects.toThrow();
     });
   });
