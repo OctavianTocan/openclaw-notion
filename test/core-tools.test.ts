@@ -132,6 +132,21 @@ describe('Default agent', () => {
       expect(block.type).toBe('paragraph');
       expect(block.paragraph?.rich_text?.[0]?.plain_text).toBe(testText);
     }, 15000);
+
+    it('rejects appending to an invalid page ID', async () => {
+      await expect(
+        notion.blocks.children.append({
+          block_id: '00000000-0000-0000-0000-000000000000',
+          children: [
+            {
+              object: 'block',
+              type: 'paragraph',
+              paragraph: { rich_text: [{ type: 'text', text: { content: 'should fail' } }] },
+            },
+          ],
+        })
+      ).rejects.toThrow();
+    });
   });
 
   describe('markdown and comments', () => {
@@ -215,6 +230,23 @@ New content here.`,
           entry.rich_text.some((item) => item.plain_text === 'Test comment from vitest')
         )
       ).toBe(true);
+    });
+
+    it('lists comments independently (not just after create)', async () => {
+      const comments = await notion.comments.list({ block_id: requirePageId(newPageId) });
+      expect(Array.isArray(comments.results)).toBe(true);
+      // At least the comment we created above should exist.
+      expect(comments.results.length).toBeGreaterThan(0);
+    });
+
+    it('rejects updating markdown on an invalid page ID', async () => {
+      await expect(
+        notion.pages.updateMarkdown({
+          page_id: '00000000-0000-0000-0000-000000000000',
+          type: 'replace_content',
+          replace_content: { new_str: 'should fail' },
+        })
+      ).rejects.toThrow();
     });
   });
 });

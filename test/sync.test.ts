@@ -102,16 +102,36 @@ This was modified.`
     expect(fs.readFileSync(filePath, 'utf8')).toContain(pageId);
   }, 20000);
 
-  it('auto: syncs based on mtime comparison', async () => {
-    const filePath = path.join(tmpDir, 'auto-test.md');
+  it('auto: pulls when remote is newer than local', async () => {
+    const filePath = path.join(tmpDir, 'auto-pull-test.md');
+    // Pull first so we have a local file with notion_id in frontmatter.
     await syncNotionFile(notion, {
       path: filePath,
       page_id: createdPageIds[0],
       direction: 'pull',
     });
+    // Backdate the local file so remote appears newer.
+    const past = new Date(Date.now() - 60_000);
+    fs.utimesSync(filePath, past, past);
     const result = await syncNotionFile(notion, { path: filePath, direction: 'auto' });
-    expect(['push', 'pull']).toContain(result.direction);
-    expect(result.reason).toBeDefined();
+    expect(result.direction).toBe('pull');
+    expect(result.reason).toContain('remote');
+  }, 25000);
+
+  it('auto: pushes when local is newer than remote', async () => {
+    const filePath = path.join(tmpDir, 'auto-push-test.md');
+    await syncNotionFile(notion, {
+      path: filePath,
+      page_id: createdPageIds[0],
+      direction: 'pull',
+    });
+    // Touch the local file so it's definitely newer than the remote.
+    const content = fs.readFileSync(filePath, 'utf8');
+    fs.writeFileSync(filePath, `${content}\n<!-- touched -->`, 'utf8');
+    const result = await syncNotionFile(notion, { path: filePath, direction: 'auto' });
+    expect(result.direction).toBe('push');
+    expect(result.reason).toContain('local');
+    createdPageIds.push(result.page_id);
   }, 25000);
 
   it('rejects push of a nonexistent local file', async () => {
