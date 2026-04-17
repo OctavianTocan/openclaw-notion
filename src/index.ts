@@ -1,19 +1,10 @@
-import { Client } from '@notionhq/client';
-import { getNotionApiKey } from './auth';
+import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
+import { Type } from "@sinclair/typebox";
+import { Client } from "@notionhq/client";
+import { getNotionApiKey } from "./auth.js";
 
-/**
- * Cached instances of the Notion SDK Client, keyed by agentId (or 'default').
- * Prevents re-instantiating the client on every tool call.
- */
 const clients = new Map<string, Client>();
 
-/**
- * Initializes and retrieves the Notion SDK Client for a given agent.
- * Automatically loads the authentication key, prioritizing agent-specific keys.
- * 
- * @param {string} [agentId] The OpenClaw agent ID.
- * @returns {Client} An authenticated Notion Client instance.
- */
 function getClient(agentId?: string): Client {
   const cacheKey = agentId || 'default';
   if (!clients.has(cacheKey)) {
@@ -22,88 +13,73 @@ function getClient(agentId?: string): Client {
   return clients.get(cacheKey)!;
 }
 
-export const tools = {
-  notion_search: {
-    description: 'Search the Notion workspace for pages or databases. Returns matching items with their IDs.',
-    parameters: {
-      type: 'OBJECT',
-      properties: {
-        query: {
-          type: 'STRING',
-          description: 'The text to search for across page titles and contents.'
-        }
-      },
-      required: ['query']
-    },
-    execute: async (args: { query: string }, context?: any) => {
-      const notion = getClient(context?.agentId);
-      const response = await notion.search({
-        query: args.query,
-        page_size: 10,
-      });
-      return JSON.stringify(response.results, null, 2);
-    }
-  },
+export default definePluginEntry({
+  id: "notion",
+  name: "Notion",
+  description: "Notion API for creating and managing pages, databases, and blocks.",
+  register(api) {
+    api.registerTool({
+      name: "notion_search",
+      label: "Notion Search",
+      description: "Search the Notion workspace for pages or databases. Returns matching items with their IDs.",
+      parameters: Type.Object({
+        query: Type.String({ description: "The text to search for across page titles and contents." })
+      }),
+      async execute(_id, params) {
+        const notion = getClient('default');
+        const response = await notion.search({
+          query: params.query,
+          page_size: 10,
+        });
+        return { content: [{ type: "text", text: JSON.stringify(response.results, null, 2) }], details: null };
+      }
+    });
 
-  notion_read: {
-    description: 'Read the raw block contents of a Notion page using its UUID.',
-    parameters: {
-      type: 'OBJECT',
-      properties: {
-        page_id: {
-          type: 'STRING',
-          description: 'The UUID of the Notion page to read.'
-        }
-      },
-      required: ['page_id']
-    },
-    execute: async (args: { page_id: string }, context?: any) => {
-      const notion = getClient(context?.agentId);
-      const response = await notion.blocks.children.list({
-        block_id: args.page_id,
-      });
-      return JSON.stringify(response.results, null, 2);
-    }
-  },
+    api.registerTool({
+      name: "notion_read",
+      label: "Notion Read",
+      description: "Read the raw block contents of a Notion page using its UUID.",
+      parameters: Type.Object({
+        page_id: Type.String({ description: "The UUID of the Notion page to read." })
+      }),
+      async execute(_id, params) {
+        const notion = getClient('default');
+        const response = await notion.blocks.children.list({
+          block_id: params.page_id,
+        });
+        return { content: [{ type: "text", text: JSON.stringify(response.results, null, 2) }], details: null };
+      }
+    });
 
-  notion_append: {
-    description: 'Append a simple text paragraph block to the bottom of a Notion page.',
-    parameters: {
-      type: 'OBJECT',
-      properties: {
-        page_id: {
-          type: 'STRING',
-          description: 'The UUID of the target Notion page.'
-        },
-        text: {
-          type: 'STRING',
-          description: 'The plain text content to append.'
-        }
-      },
-      required: ['page_id', 'text']
-    },
-    execute: async (args: { page_id: string, text: string }, context?: any) => {
-      const notion = getClient(context?.agentId);
-      const response = await notion.blocks.children.append({
-        block_id: args.page_id,
-        children: [
-          {
-            object: 'block',
-            type: 'paragraph',
-            paragraph: {
-              rich_text: [
-                {
-                  type: 'text',
-                  text: {
-                    content: args.text,
+    api.registerTool({
+      name: "notion_append",
+      label: "Notion Append",
+      description: "Append a simple text paragraph block to the bottom of a Notion page.",
+      parameters: Type.Object({
+        page_id: Type.String({ description: "The UUID of the target Notion page." }),
+        text: Type.String({ description: "The plain text content to append." })
+      }),
+      async execute(_id, params) {
+        const notion = getClient('default');
+        const response = await notion.blocks.children.append({
+          block_id: params.page_id,
+          children: [
+            {
+              object: 'block',
+              type: 'paragraph',
+              paragraph: {
+                rich_text: [
+                  {
+                    type: 'text',
+                    text: { content: params.text },
                   },
-                },
-              ],
+                ],
+              },
             },
-          },
-        ],
-      });
-      return JSON.stringify(response.results, null, 2);
-    }
+          ],
+        });
+        return { content: [{ type: "text", text: JSON.stringify(response.results, null, 2) }], details: null };
+      }
+    });
   }
-};
+});
