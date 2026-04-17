@@ -1,0 +1,94 @@
+name: Quality
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+
+concurrency:
+  group: quality-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # ── Biome lint + format ────────────────────────────────────────────────
+  biome:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Biome
+        uses: biomejs/setup-biome@v2
+        with:
+          version: '2.4.12'
+
+      - name: Biome CI
+        run: biome ci --reporter=github
+
+  # ── TypeScript type-check ──────────────────────────────────────────────
+  typecheck:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Type-check
+        run: pnpm build
+
+  # ── Tests (live API, needs secrets) ────────────────────────────────────
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    # Only run tests when API keys are available (skip on external forks).
+    if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build
+        run: pnpm build
+
+      - name: Write API keys
+        run: |
+          mkdir -p ~/.config/notion
+          echo "${{ secrets.NOTION_API_KEY }}" > ~/.config/notion/api_key
+          echo "${{ secrets.NOTION_API_KEY_GF_AGENT }}" > ~/.config/notion/api_key_gf_agent
+
+      - name: Run tests
+        run: pnpm test
