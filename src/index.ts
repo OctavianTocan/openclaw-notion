@@ -563,7 +563,7 @@ export default definePluginEntry({
     }));
 
     // --- notion_logs_read ---
-    api.registerTool(() => ({
+    api.registerTool((ctx) => ({
       name: 'notion_logs_read',
       label: 'Notion Logs Read',
       description:
@@ -598,6 +598,8 @@ export default definePluginEntry({
         return asJsonContent(
           readNotionLogs({
             ...params,
+            // Default to the calling agent's context unless explicitly overridden.
+            agent_id: params.agent_id ?? ctx.agentId,
           })
         );
       },

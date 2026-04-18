@@ -13,6 +13,13 @@ import Database from 'better-sqlite3';
 
 /* ─── Types ──────────────────────────────────────────────────────────────── */
 
+/**
+ * The set of Notion operations the audit log can record.
+ *
+ * Each literal corresponds to a distinct tool-level action (e.g. `'read'` for
+ * page reads, `'sync_push'` for local→Notion syncs) so logs can be filtered
+ * by operation type.
+ */
 export type Operation =
   | 'search'
   | 'read'
@@ -33,9 +40,18 @@ export type Operation =
   | 'help'
   | 'doctor';
 
+/**
+ * Caller-supplied context attached to every audit log entry.
+ *
+ * Set once at startup via {@link setAuditContext} so individual
+ * {@link logOperation} calls don't need to repeat the agent/session info.
+ */
 export interface AuditContext {
+  /** Unique identifier for the agent instance writing logs. */
   agentId: string;
+  /** Optional MCP session ID, used to correlate entries within one session. */
   sessionId?: string;
+  /** When `true`, marks log rows as test data so they can be filtered out. */
   testRun?: boolean;
 }
 
@@ -168,14 +184,22 @@ let context: AuditContext = {
   testRun: false,
 };
 
+/** Replace the current audit context (agent ID, session, test flag). */
 export function setAuditContext(ctx: AuditContext) {
   context = { ...ctx };
 }
 
+/** Return a shallow copy of the current audit context. */
 export function getAuditContext(): AuditContext {
   return { ...context };
 }
 
+/**
+ * Write a single operation to the audit log and return its row ID.
+ *
+ * Optionally persists the raw HTTP request/response in separate tables and
+ * links them via foreign keys so large payloads don't bloat the main table.
+ */
 export function logOperation(opts: LogOptions): number {
   const { rawRequest, rawResponse, ...rest } = opts;
   getDb(); // ensure lazy init
@@ -227,6 +251,10 @@ export function logOperation(opts: LogOptions): number {
 }
 
 /* ─── Helpers to extract raw data from Notion SDK request/response objects ── */
+// The Notion SDK doesn't export concrete types for its internal request/response
+// objects, so we accept `object` and use `as` casts to reach the properties we
+// need. Each helper isolates a single field access so the cast is narrow and
+// easy to update if the SDK ever adds proper typings.
 
 function rawRequestUrl(req: object): string {
   return String((req as { url?: string }).url ?? '');
@@ -414,6 +442,12 @@ export function readAuditLogs(opts: {
   return db.prepare(sql).all(params) as Record<string, unknown>[];
 }
 
+/**
+ * Query the audit log with basic filters (legacy helper).
+ *
+ * Predates the full-featured {@link readAuditLogs}; kept for internal callers
+ * that only need agent/operation/page/time filtering without raw payload JOINs.
+ */
 export function getOperations(opts: {
   agentId?: string;
   operation?: Operation;
@@ -459,6 +493,7 @@ export function getOperations(opts: {
   }));
 }
 
+/** Convenience wrapper: return all `'delete'` operations, optionally scoped to an agent and time range. */
 export function getDeletedPages(opts: { agentId?: string; since?: string }) {
   return getOperations({
     agentId: opts.agentId,
