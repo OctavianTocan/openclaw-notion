@@ -19,6 +19,7 @@ import { findTitlePropertyName } from './helpers.js';
 import { runNotionDoctor } from './tools/doctor.js';
 import { getNotionFileTree } from './tools/file-tree.js';
 import { getNotionHelp } from './tools/help.js';
+import { readNotionLogs } from './tools/logs.js';
 import { deleteNotionPage, moveNotionPage, publishNotionPage } from './tools/pages.js';
 import { queryNotionDatabase } from './tools/query.js';
 import { syncNotionFile } from './tools/sync.js';
@@ -30,6 +31,7 @@ export { NOTION_VERSION } from './constants.js';
 export { runNotionDoctor } from './tools/doctor.js';
 export { getNotionFileTree } from './tools/file-tree.js';
 export { getNotionHelp } from './tools/help.js';
+export { readNotionLogs } from './tools/logs.js';
 export { deleteNotionPage, moveNotionPage, publishNotionPage } from './tools/pages.js';
 export { queryNotionDatabase } from './tools/query.js';
 export { syncNotionFile } from './tools/sync.js';
@@ -565,6 +567,49 @@ export default definePluginEntry({
             return asJsonContent(await runNotionDoctor(ctx.agentId));
           },
         });
+      },
+    }));
+
+    // --- notion_logs_read ---
+    api.registerTool(() => ({
+      name: 'notion_logs_read',
+      label: 'Notion Logs Read',
+      description:
+        'Read audit log entries from the local notion-operations.db. Supports filtering by tool, operation, status, page/database ID, agent, session, and time range.',
+      parameters: Type.Object({
+        limit: Type.Optional(
+          Type.Number({ description: 'Max entries to return (default 20, max 100).' })
+        ),
+        tool_name: Type.Optional(Type.String({ description: 'Filter by tool name.' })),
+        operation: Type.Optional(
+          Type.String({ description: 'Filter by operation type (search, read, create, etc.).' })
+        ),
+        status: Type.Optional(
+          Type.String({ description: 'Filter by status: "success" or "error".' })
+        ),
+        page_id: Type.Optional(Type.String({ description: 'Filter by target page ID.' })),
+        database_id: Type.Optional(Type.String({ description: 'Filter by target database ID.' })),
+        since: Type.Optional(
+          Type.String({ description: 'ISO timestamp lower bound for entries.' })
+        ),
+        session_id: Type.Optional(Type.String({ description: 'Filter by session ID.' })),
+        agent_id: Type.Optional(Type.String({ description: 'Filter by agent ID.' })),
+        include_raw: Type.Optional(
+          Type.Boolean({
+            description: 'Include raw HTTP request/response payloads (default false).',
+          })
+        ),
+      }),
+      async execute(_id, params) {
+        // Cap limit to prevent accidentally dumping the entire audit table.
+        const limit = Math.min(params.limit ?? 20, 100);
+        return asJsonContent(
+          readNotionLogs({
+            ...params,
+            limit,
+            status: params.status as 'success' | 'error' | undefined,
+          })
+        );
       },
     }));
   },
