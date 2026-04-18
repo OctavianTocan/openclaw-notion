@@ -13,8 +13,8 @@ import {
   createTestPage,
   createTestParent,
   deleteTestParent,
-  getSecondaryAgentId,
   makeClient,
+  SECONDARY_AGENT,
 } from './helpers.js';
 
 type MinimalPage = {
@@ -24,8 +24,6 @@ type MinimalPage = {
   in_trash?: boolean;
   archived?: boolean;
 };
-
-const SECONDARY_AGENT = getSecondaryAgentId();
 
 describe(`Secondary agent (${SECONDARY_AGENT})`, () => {
   const secondaryNotion = makeClient(SECONDARY_AGENT);

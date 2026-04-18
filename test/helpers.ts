@@ -38,6 +38,17 @@ export function getSecondaryAgentId(): string {
 
 export const SECONDARY_AGENT = getSecondaryAgentId();
 
+const orphanedParentsByClient = new WeakMap<Client, Set<string>>();
+
+function getOrphanedParents(notion: Client): Set<string> {
+  let parents = orphanedParentsByClient.get(notion);
+  if (!parents) {
+    parents = new Set<string>();
+    orphanedParentsByClient.set(notion, parents);
+  }
+  return parents;
+}
+
 export function getNotionApiKey(agentId?: string): string {
   if (agentId === undefined) {
     const defaultKeyPath = path.join(NOTION_CONFIG_DIR, 'api_key');
@@ -51,19 +62,14 @@ export function getNotionApiKey(agentId?: string): string {
   }
 
   if (agentId === 'secondary') {
-    const envAgent = process.env.NOTION_SECONDARY_AGENT ?? detectSecondaryAgentId();
-    const resolvedAgent = envAgent === 'secondary' ? detectSecondaryAgentId() : envAgent;
+    const resolvedAgent = process.env.NOTION_SECONDARY_AGENT ?? detectSecondaryAgentId();
     const agentKeyPath = path.join(NOTION_CONFIG_DIR, `api_key_${resolvedAgent}`);
     if (fs.existsSync(agentKeyPath)) {
       return fs.readFileSync(agentKeyPath, 'utf8').trim();
     }
-    const defaultKeyPath = path.join(NOTION_CONFIG_DIR, 'api_key');
-    if (fs.existsSync(defaultKeyPath)) {
-      return fs.readFileSync(defaultKeyPath, 'utf8').trim();
-    }
     throw new Error(
-      `Notion API key not found for agent "${envAgent}". ` +
-        `Expected at ${agentKeyPath} or ${NOTION_CONFIG_DIR}/api_key.`
+      `Notion API key not found for secondary agent "${resolvedAgent}". ` +
+        `Expected at ${agentKeyPath}.`
     );
   }
 
@@ -94,7 +100,7 @@ export function makeClient(agentId?: string): Client {
 /*  Test fixture helpers — NEVER use existing workspace pages          */
 /* ------------------------------------------------------------------ */
 
-type MinimalPage = { id: string };
+type MinimalPage = { id: string; effectiveParentId?: string };
 
 /**
  * Create a dedicated parent page for a test file.
@@ -119,7 +125,7 @@ export async function createTestParent(notion: Client, testFileName: string): Pr
   // Strategy 1: Try to create at workspace root (ideal — completely isolated)
   try {
     const page = (await notion.pages.create({
-      parent: { type: 'workspace' as const },
+      parent: { type: 'workspace' as const, workspace: true },
       properties: {
         title: { title: [{ type: 'text', text: { content: parentTitle } }] },
       },
@@ -136,8 +142,20 @@ export async function createTestParent(notion: Client, testFileName: string): Pr
   // Strategy 2: Find ANY existing page in the workspace and create the
   // test parent as a child of it. The existing page is not modified —
   // we only use it as an anchor point. The test parent itself is new content.
-  const search = await notion.search({ query: '', page_size: 3 });
-  const firstPage = search.results.find((r) => r.object === 'page');
+  let cursor: string | undefined;
+  let firstPage:
+    | {
+        id: string;
+        object: 'page';
+      }
+    | undefined;
+
+  do {
+    const search = await notion.search({ query: '', page_size: 25, start_cursor: cursor });
+    firstPage = search.results.find((r): r is { id: string; object: 'page' } => r.object === 'page');
+    cursor = search.next_cursor ?? undefined;
+  } while (!firstPage && cursor);
+
   if (!firstPage) {
     throw new Error(
       `Cannot create test parent for "${testFileName}": ` +
@@ -160,15 +178,27 @@ export async function createTestParent(notion: Client, testFileName: string): Pr
  * Safe to call on an already-deleted ID (no-op).
  */
 export async function deleteTestParent(notion: Client, parentId: string): Promise<void> {
-  try {
-    await notion.pages.update({ page_id: parentId, in_trash: true });
-  } catch (err) {
-    // Already deleted — no-op
-    const e = err as { code?: string };
-    // Deleted or its parent/ancestor was already deleted — nothing left to clean up.
-    if (e.code === 'object_not_found' || e.code === 'archived_ancestor') return;
-    throw err;
+  const orphanedParents = getOrphanedParents(notion);
+
+  const trashPage = async (pageId: string): Promise<void> => {
+    try {
+      await notion.pages.update({ page_id: pageId, in_trash: true });
+    } catch (err) {
+      const e = err as { code?: string };
+      if (e.code === 'object_not_found' || e.code === 'archived_ancestor') return;
+      throw err;
+    }
+  };
+
+  await trashPage(parentId);
+
+  for (const orphanedParentId of orphanedParents) {
+    if (orphanedParentId !== parentId) {
+      await trashPage(orphanedParentId);
+    }
   }
+
+  orphanedParents.clear();
 }
 
 /**
@@ -206,7 +236,8 @@ export async function createTestPage(
 
   for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
     try {
-      return await tryCreate(currentParent);
+      const page = await tryCreate(currentParent);
+      return { ...page, effectiveParentId: currentParent };
     } catch (err) {
       lastError = err;
       if (!isArchivedAncestorError(err)) throw err;
@@ -214,6 +245,7 @@ export async function createTestPage(
       // (This can happen if the test parent itself was somehow archived)
       const freshParent = await createTestParent(notion, `orphaned-retry-${Date.now()}`);
       if (freshParent === currentParent) break;
+      getOrphanedParents(notion).add(freshParent);
       currentParent = freshParent;
     }
   }

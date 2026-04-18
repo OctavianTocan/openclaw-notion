@@ -4,10 +4,11 @@
  * Every operation is logged with full state snapshots before/after,
  * raw request/response bodies, and Notion API tracing headers.
  *
- * Log lives at ~/.openclaw/logs/notion-operations.db
+ * Log lives at the user's XDG data directory under `openclaw/notion-operations.db`.
  */
 
 import * as fs from 'node:fs';
+import * as os from 'node:os';
 import * as path from 'node:path';
 import Database from 'better-sqlite3';
 
@@ -60,10 +61,11 @@ interface LogOptions {
 
 /* ─── Database setup ─────────────────────────────────────────────────────── */
 
-const DB_PATH = path.join(
-  process.env.XDG_DATA_HOME ?? path.join(process.env.HOME ?? '/home/octavian', '.openclaw', 'data'),
-  'notion-operations.db'
-);
+const APP_DATA_DIR = process.env.XDG_DATA_HOME
+  ? path.join(process.env.XDG_DATA_HOME, 'openclaw')
+  : path.join(os.homedir(), '.local', 'share', 'openclaw');
+
+const DB_PATH = path.join(APP_DATA_DIR, 'notion-operations.db');
 
 // Ensure directory exists
 const dbDir = path.dirname(DB_PATH);

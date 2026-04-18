@@ -48,9 +48,17 @@ describe('Default agent — core tools', () => {
     it('finds a page by keyword', async () => {
       const title = `[vitest] search-fixture-${Date.now()}`;
       const page = await createTestPage(notion, parentId, title, 'Searchable content.');
-      const response = await notion.search({ query: title, page_size: 5 });
-      const found = response.results.some((r) => r.id === page.id);
-      expect(found || response.results.length >= 0).toBe(true);
+
+      let found = false;
+      for (let attempt = 0; attempt < 10 && !found; attempt++) {
+        const response = await notion.search({ query: title, page_size: 20 });
+        found = response.results.some((r) => r.id === page.id);
+        if (!found) {
+          await new Promise((resolve) => setTimeout(resolve, 1000));
+        }
+      }
+
+      expect(found).toBe(true);
     }, 20000);
 
     it('handles a query with no matches gracefully', async () => {

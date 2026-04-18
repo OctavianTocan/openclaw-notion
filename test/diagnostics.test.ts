@@ -161,7 +161,7 @@ describe('Cross-agent workspace isolation (destructive ops)', () => {
     await expect(
       moveNotionPage(secondaryNotion, {
         page_id: defaultPage.id,
-        new_parent_id: defaultPage.id,
+        new_parent_id: defaultParentId,
       })
     ).rejects.toThrow();
   });

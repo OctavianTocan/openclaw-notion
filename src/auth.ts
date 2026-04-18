@@ -5,8 +5,8 @@
  * separate API keys stored in `~/.config/notion/`. The lookup order is:
  *
  * 1. `~/.config/notion/api_key_{agentId}` (agent-specific)
- * 2. `~/.config/notion/api_key_{NOTION_SECONDARY_AGENT}` (env-var override, 'secondary' only)
- * 3. `~/.config/notion/api_key` (shared fallback)
+ * 2. `~/.config/notion/api_key_{NOTION_SECONDARY_AGENT}` (explicit override, 'secondary' only)
+ * 3. `~/.config/notion/api_key` (shared fallback for explicit non-secondary agent IDs)
  *
  * This guarantees workspace isolation: each agent hits its own Notion
  * workspace and cannot access pages belonging to other agents.
@@ -35,9 +35,9 @@ function detectSecondaryAgentId(): string {
  *
  * @param agentId - OpenClaw agent identifier. Omit or pass `undefined` for
  *   the default workspace key. Use 'secondary' for the secondary agent
- *   (respects NOTION_SECONDARY_AGENT env var, falls back to disk detection).
+ *   (honors NOTION_SECONDARY_AGENT exactly when set, otherwise falls back to disk detection).
  * @returns The trimmed API key string.
- * @throws {Error} When neither the agent-specific nor fallback key file exists.
+ * @throws {Error} When the required key file does not exist.
  */
 export function getNotionApiKey(agentId?: string): string {
   // Undefined always means the default key — NOTION_SECONDARY_AGENT does not apply.
@@ -52,22 +52,16 @@ export function getNotionApiKey(agentId?: string): string {
     );
   }
 
-  // 'secondary' is the named secondary agent — apply env-var override + disk detection.
+  // 'secondary' is a dedicated workspace — do not silently collapse onto the default key.
   if (agentId === 'secondary') {
-    const envAgent = process.env.NOTION_SECONDARY_AGENT ?? detectSecondaryAgentId();
-    const resolvedAgent = envAgent === 'secondary' ? detectSecondaryAgentId() : envAgent;
+    const resolvedAgent = process.env.NOTION_SECONDARY_AGENT ?? detectSecondaryAgentId();
     const agentKeyPath = path.join(NOTION_CONFIG_DIR, `api_key_${resolvedAgent}`);
     if (fs.existsSync(agentKeyPath)) {
       return fs.readFileSync(agentKeyPath, 'utf8').trim();
     }
-    // Fall back to default key when the secondary key is not found.
-    const defaultKeyPath = path.join(NOTION_CONFIG_DIR, 'api_key');
-    if (fs.existsSync(defaultKeyPath)) {
-      return fs.readFileSync(defaultKeyPath, 'utf8').trim();
-    }
     throw new Error(
-      `Notion API key not found for agent "${envAgent}". ` +
-        `Expected at ${agentKeyPath} or ${NOTION_CONFIG_DIR}/api_key.`
+      `Notion API key not found for secondary agent "${resolvedAgent}". ` +
+        `Expected at ${agentKeyPath}.`
     );
   }
 
