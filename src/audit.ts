@@ -13,6 +13,13 @@ import Database from 'better-sqlite3';
 
 /* ─── Types ──────────────────────────────────────────────────────────────── */
 
+/**
+ * The set of Notion operations the audit log can record.
+ *
+ * Each literal corresponds to a distinct tool-level action (e.g. `'read'` for
+ * page reads, `'sync_push'` for local→Notion syncs) so logs can be filtered
+ * by operation type.
+ */
 export type Operation =
   | 'search'
   | 'read'
@@ -33,9 +40,18 @@ export type Operation =
   | 'help'
   | 'doctor';
 
+/**
+ * Caller-supplied context attached to every audit log entry.
+ *
+ * Set once at startup via {@link setAuditContext} so individual
+ * {@link logOperation} calls don't need to repeat the agent/session info.
+ */
 export interface AuditContext {
+  /** Unique identifier for the agent instance writing logs. */
   agentId: string;
+  /** Optional MCP session ID, used to correlate entries within one session. */
   sessionId?: string;
+  /** When `true`, marks log rows as test data so they can be filtered out. */
   testRun?: boolean;
 }
 
@@ -174,14 +190,22 @@ let context: AuditContext = {
   testRun: false,
 };
 
+/** Replace the current audit context (agent ID, session, test flag). */
 export function setAuditContext(ctx: AuditContext) {
   context = { ...ctx };
 }
 
+/** Return a shallow copy of the current audit context. */
 export function getAuditContext(): AuditContext {
   return { ...context };
 }
 
+/**
+ * Write a single operation to the audit log and return its row ID.
+ *
+ * Optionally persists the raw HTTP request/response in separate tables and
+ * links them via foreign keys so large payloads don't bloat the main table.
+ */
 export function logOperation(opts: LogOptions): number {
   const { rawRequest, rawResponse, ...rest } = opts;
   getDb(); // ensure lazy init
@@ -233,6 +257,10 @@ export function logOperation(opts: LogOptions): number {
 }
 
 /* ─── Helpers to extract raw data from Notion SDK request/response objects ── */
+// The Notion SDK doesn't export concrete types for its internal request/response
+// objects, so we accept `object` and use `as` casts to reach the properties we
+// need. Each helper isolates a single field access so the cast is narrow and
+// easy to update if the SDK ever adds proper typings.
 
 function rawRequestUrl(req: object): string {
   return String((req as { url?: string }).url ?? '');
@@ -260,8 +288,172 @@ function rawResponseHeaders(res: object): Record<string, string> {
   return (res as { headers?: Record<string, string> }).headers ?? {};
 }
 
+/* ─── Safe JSON parsing ─────────────────────────────────────────────────── */
+
+/**
+ * Parse a JSON string without throwing on malformed data.
+ *
+ * Returns `null` when the value is nullish, non-string, or unparseable,
+ * so a single corrupt row can't break an entire audit log read.
+ */
+export function safeJsonParse(value: unknown): unknown | null {
+  if (value == null) return null;
+  if (typeof value !== 'string') return null;
+  try {
+    return JSON.parse(value);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Redact sensitive fields (Authorization headers, tokens) from a parsed
+ * request body object so raw log reads don't leak credentials.
+ */
+export function redactSensitiveFields(obj: unknown): unknown {
+  if (obj == null || typeof obj !== 'object') return obj;
+  const record = obj as Record<string, unknown>;
+  const result: Record<string, unknown> = {};
+  for (const [key, val] of Object.entries(record)) {
+    if (key.toLowerCase().includes('authorization') || key.toLowerCase().includes('token')) {
+      result[key] = '[REDACTED]';
+    } else if (typeof val === 'object' && val !== null && !Array.isArray(val)) {
+      result[key] = redactSensitiveFields(val);
+    } else {
+      result[key] = val;
+    }
+  }
+  return result;
+}
+
 /* ─── Query helpers ──────────────────────────────────────────────────────── */
 
+/**
+ * Clamp a limit value to a safe non-negative integer in the range [0, 100].
+ *
+ * Rejects NaN, fractional, and negative values that could cause unexpected
+ * SQLite behaviour (e.g. `LIMIT -1` disables the cap entirely).
+ */
+export function clampLimit(raw: number | undefined, fallback = 20): number {
+  const n = raw ?? fallback;
+  if (!Number.isFinite(n) || !Number.isInteger(n)) return fallback;
+  return Math.max(0, Math.min(n, 100));
+}
+
+/**
+ * Extended audit log reader supporting all filterable columns.
+ *
+ * Unlike {@link getOperations} (which predates the tool surface), this function
+ * covers every filter the `notion_logs_read` tool exposes, including tool_name,
+ * status, session_id, and target_database_id, and optionally JOINs the raw
+ * request/response tables so callers can inspect full HTTP payloads.
+ */
+export function readAuditLogs(opts: {
+  agentId?: string;
+  sessionId?: string;
+  operation?: string;
+  toolName?: string;
+  status?: 'success' | 'error';
+  targetPageId?: string;
+  targetDatabaseId?: string;
+  since?: string;
+  limit?: number;
+  includeRaw?: boolean;
+}) {
+  const db = getDb();
+  const conditions: string[] = [];
+  const params: Record<string, unknown> = {};
+
+  if (opts.agentId) {
+    conditions.push('o.agent_id = @agentId');
+    params.agentId = opts.agentId;
+  }
+  if (opts.sessionId) {
+    conditions.push('o.session_id = @sessionId');
+    params.sessionId = opts.sessionId;
+  }
+  if (opts.operation) {
+    conditions.push('o.operation = @operation');
+    params.operation = opts.operation;
+  }
+  if (opts.toolName) {
+    conditions.push('o.tool_name = @toolName');
+    params.toolName = opts.toolName;
+  }
+  if (opts.status) {
+    conditions.push('o.status = @status');
+    params.status = opts.status;
+  }
+  if (opts.targetPageId) {
+    conditions.push('o.target_page_id = @targetPageId');
+    params.targetPageId = opts.targetPageId;
+  }
+  if (opts.targetDatabaseId) {
+    conditions.push('o.target_database_id = @targetDatabaseId');
+    params.targetDatabaseId = opts.targetDatabaseId;
+  }
+  if (opts.since) {
+    // Normalize to canonical ISO-8601 with milliseconds so lexicographic
+    // comparison matches the toISOString() format stored in the DB.
+    const d = new Date(opts.since);
+    conditions.push('o.timestamp >= @since');
+    params.since = Number.isNaN(d.getTime()) ? opts.since : d.toISOString();
+  }
+
+  const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
+  const limit = clampLimit(opts.limit);
+  params.limit = limit;
+
+  // When include_raw is true, JOIN the raw request/response tables so the
+  // caller can inspect full HTTP payloads for debugging.
+  if (opts.includeRaw) {
+    const sql = `
+      SELECT o.*,
+             req.url   AS raw_request_url,
+             req.method AS raw_request_method,
+             req.body   AS raw_request_body,
+             req.headers AS raw_request_headers,
+             res.status_code AS raw_response_status,
+             res.body   AS raw_response_body,
+             res.headers AS raw_response_headers
+        FROM notion_operations o
+        LEFT JOIN notion_raw_requests  req ON o.request_id  = req.id
+        LEFT JOIN notion_raw_responses res ON o.response_id = res.id
+        ${where}
+        ORDER BY o.timestamp DESC
+        LIMIT @limit`;
+    const rows = db.prepare(sql).all(params) as Record<string, unknown>[];
+    return rows.map((row) => ({
+      ...row,
+      state_before: safeJsonParse(row.state_before),
+      state_after: safeJsonParse(row.state_after),
+      raw_request_body: redactSensitiveFields(safeJsonParse(row.raw_request_body)),
+      raw_request_headers: redactSensitiveFields(safeJsonParse(row.raw_request_headers)),
+      raw_response_body: safeJsonParse(row.raw_response_body),
+      raw_response_headers: safeJsonParse(row.raw_response_headers),
+    }));
+  }
+
+  // Compact path: skip JOINs and omit state_before/state_after blobs to keep
+  // output concise. These columns are large and rarely needed in quick overviews.
+  const sql = `
+    SELECT o.id, o.timestamp, o.agent_id, o.session_id, o.test_run,
+           o.operation, o.tool_name, o.target_page_id, o.target_database_id,
+           o.parent_page_id, o.local_path, o.sync_direction, o.status,
+           o.error_code, o.error_message, o.notion_request_id, o.duration_ms
+      FROM notion_operations o
+      ${where}
+      ORDER BY o.timestamp DESC
+      LIMIT @limit`;
+  return db.prepare(sql).all(params) as Record<string, unknown>[];
+}
+
+/**
+ * Query the audit log with basic filters (legacy helper).
+ *
+ * Predates the full-featured {@link readAuditLogs}; kept for internal callers
+ * that only need agent/operation/page/time filtering without raw payload JOINs.
+ */
 export function getOperations(opts: {
   agentId?: string;
   operation?: Operation;
@@ -302,11 +494,12 @@ export function getOperations(opts: {
 
   return rows.map((row) => ({
     ...row,
-    state_before: row.state_before ? JSON.parse(row.state_before as string) : null,
-    state_after: row.state_after ? JSON.parse(row.state_after as string) : null,
+    state_before: safeJsonParse(row.state_before),
+    state_after: safeJsonParse(row.state_after),
   }));
 }
 
+/** Convenience wrapper: return all `'delete'` operations, optionally scoped to an agent and time range. */
 export function getDeletedPages(opts: { agentId?: string; since?: string }) {
   return getOperations({
     agentId: opts.agentId,
