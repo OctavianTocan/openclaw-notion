@@ -359,8 +359,11 @@ export function readAuditLogs(opts: {
     params.targetDatabaseId = opts.targetDatabaseId;
   }
   if (opts.since) {
+    // Normalize to canonical ISO-8601 with milliseconds so lexicographic
+    // comparison matches the toISOString() format stored in the DB.
+    const d = new Date(opts.since);
     conditions.push('o.timestamp >= @since');
-    params.since = opts.since;
+    params.since = Number.isNaN(d.getTime()) ? opts.since : d.toISOString();
   }
 
   const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
@@ -391,7 +394,7 @@ export function readAuditLogs(opts: {
       state_before: safeJsonParse(row.state_before),
       state_after: safeJsonParse(row.state_after),
       raw_request_body: redactSensitiveFields(safeJsonParse(row.raw_request_body)),
-      raw_request_headers: safeJsonParse(row.raw_request_headers),
+      raw_request_headers: redactSensitiveFields(safeJsonParse(row.raw_request_headers)),
       raw_response_body: safeJsonParse(row.raw_response_body),
       raw_response_headers: safeJsonParse(row.raw_response_headers),
     }));

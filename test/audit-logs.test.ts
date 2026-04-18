@@ -240,6 +240,29 @@ describeDb('readAuditLogs — integration', () => {
     expect(row).not.toHaveProperty('state_before');
     expect(row).not.toHaveProperty('state_after');
   });
+
+  it('normalizes since timestamp for boundary filtering', () => {
+    setAuditContext({ agentId: 'test-agent', sessionId: testSession, testRun: true });
+
+    // Log an operation and capture its approximate time
+    const beforeLog = new Date().toISOString();
+    logOperation({
+      operation: 'help',
+      toolName: 'notion_help',
+      status: 'success',
+    });
+
+    // Query with a truncated ISO string (no milliseconds) that should still
+    // match, because readAuditLogs normalizes it to canonical form.
+    const truncated = beforeLog.replace(/\.\d{3}Z$/, 'Z');
+    const rows = readAuditLogs({
+      sessionId: testSession,
+      operation: 'help',
+      since: truncated,
+    });
+    expect(rows.length).toBeGreaterThanOrEqual(1);
+    expect((rows[0] as Record<string, unknown>).tool_name).toBe('notion_help');
+  });
 });
 
 describeDb('readAuditLogs — includeRaw path', () => {
@@ -309,6 +332,41 @@ describeDb('readAuditLogs — includeRaw path', () => {
     const row = rows[0] as Record<string, unknown>;
     expect(row.state_before).toBeNull();
     expect(row.state_after).toBeNull();
+  });
+
+  it('redacts sensitive fields from raw_request_headers', () => {
+    setAuditContext({ agentId: 'test-agent', sessionId: testSession, testRun: true });
+
+    logOperation({
+      operation: 'search',
+      toolName: 'notion_search',
+      status: 'success',
+      rawRequest: {
+        url: 'https://api.notion.com/v1/search',
+        method: 'POST',
+        headers: {
+          Authorization: 'Bearer ntn_leak_me',
+          'x-api-token': 'secret-token-value',
+          'Content-Type': 'application/json',
+        },
+      },
+    });
+
+    const rows = readAuditLogs({
+      sessionId: testSession,
+      includeRaw: true,
+      toolName: 'notion_search',
+    });
+    const row = rows[0] as Record<string, unknown>;
+    const headers = row.raw_request_headers as Record<string, string> | null;
+    expect(headers).not.toBeNull();
+    if (headers) {
+      // Write-time sanitizer catches Authorization; read-time redaction
+      // catches both Authorization and token-bearing headers.
+      expect(headers.Authorization).toBe('[REDACTED]');
+      expect(headers['x-api-token']).toBe('[REDACTED]');
+      expect(headers['Content-Type']).toBe('application/json');
+    }
   });
 });
 
