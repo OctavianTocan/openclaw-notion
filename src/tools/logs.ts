@@ -9,6 +9,10 @@
 
 import { readAuditLogs } from '../audit.js';
 
+/** Max rows the tool will ever return. */
+const MAX_LIMIT = 100;
+const DEFAULT_LIMIT = 20;
+
 export interface ReadNotionLogsParams {
   limit?: number;
   tool_name?: string;
@@ -25,10 +29,21 @@ export interface ReadNotionLogsParams {
 /**
  * Query the notion-operations.db audit log with the given filters.
  *
+ * Clamps `limit` to a safe non-negative integer (max 100) so callers
+ * outside the tool schema can't accidentally request unbounded reads.
  * Returns an object with `count` and `rows` so the caller always knows
  * how many results came back without counting array elements.
  */
 export function readNotionLogs(params: ReadNotionLogsParams) {
+  const rawLimit = params.limit ?? DEFAULT_LIMIT;
+  const limit = Math.max(
+    0,
+    Math.min(
+      Number.isFinite(rawLimit) && Number.isInteger(rawLimit) ? rawLimit : DEFAULT_LIMIT,
+      MAX_LIMIT
+    )
+  );
+
   const rows = readAuditLogs({
     agentId: params.agent_id,
     sessionId: params.session_id,
@@ -38,7 +53,7 @@ export function readNotionLogs(params: ReadNotionLogsParams) {
     targetPageId: params.page_id,
     targetDatabaseId: params.database_id,
     since: params.since,
-    limit: params.limit,
+    limit,
     includeRaw: params.include_raw,
   });
 
