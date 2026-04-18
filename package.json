@@ -1,7 +1,7 @@
 {
   "name": "openclaw-notion",
   "version": "1.0.0",
-  "description": "Native Notion integration for OpenClaw \u2014 17 tools with markdown-first editing, sync, and multi-agent workspace isolation.",
+  "description": "Native Notion integration for OpenClaw — 17 tools with markdown-first editing, sync, and multi-agent workspace isolation.",
   "main": "dist/index.js",
   "scripts": {
     "build": "tsc",
@@ -26,10 +26,12 @@
   "dependencies": {
     "@notionhq/client": "^5.18.0",
     "@sinclair/typebox": "^0.34.49",
+    "better-sqlite3": "^12.9.0",
     "gray-matter": "^4.0.3"
   },
   "devDependencies": {
     "@biomejs/biome": "^2.4.12",
+    "@types/better-sqlite3": "^7.6.13",
     "@types/node": "^25.6.0",
     "openclaw": "^2026.4.15",
     "typescript": "^6.0.3",

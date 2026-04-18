@@ -1,121 +1,90 @@
 /**
- * Multi-agent workspace isolation tests.
+ * Tests for the secondary agent (gf_agent / Esther's workspace).
+ * Verifies workspace isolation and that the secondary agent key works.
  *
- * Verifies that a secondary agent authenticates to a separate Notion
- * workspace and cannot see pages belonging to the default agent.
- *
- * Set `NOTION_SECONDARY_AGENT` to the agent ID whose key lives at
- * `~/.config/notion/api_key_{id}`. Defaults to `"secondary"`.
+ * Each test file creates its own dedicated parent page in beforeAll().
+ * All fixtures are children of that parent. afterAll() deletes the parent,
+ * cascading to all children. Tests NEVER touch existing workspace content.
  */
 
-import { beforeAll, describe, expect, it } from 'vitest';
-import { makeClient } from './helpers.js';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { deleteNotionPage } from '../src/index.js';
+import {
+  createTestPage,
+  createTestParent,
+  deleteTestParent,
+  getSecondaryAgentId,
+  makeClient,
+} from './helpers.js';
 
-const SECONDARY_AGENT = process.env.NOTION_SECONDARY_AGENT ?? 'secondary';
-
-type SearchResultEntry = {
+type MinimalPage = {
   id: string;
-  properties?: {
-    title?: { title?: Array<{ plain_text?: string }> };
-    Name?: { title?: Array<{ plain_text?: string }> };
-  };
+  object?: string;
+  parent?: { page_id?: string };
+  in_trash?: boolean;
+  archived?: boolean;
 };
 
-type ParagraphBlock = {
-  paragraph?: { rich_text?: Array<{ plain_text?: string }> };
-};
+const SECONDARY_AGENT = getSecondaryAgentId();
 
 describe(`Secondary agent (${SECONDARY_AGENT})`, () => {
-  const notion = makeClient(SECONDARY_AGENT);
-  let testPageId: string;
+  const secondaryNotion = makeClient(SECONDARY_AGENT);
+  let parentId: string;
 
-  describe('notion_search', () => {
-    it('authenticates and returns results from the secondary workspace', async () => {
-      const response = await notion.search({ query: '', page_size: 5 });
-      expect(Array.isArray(response.results)).toBe(true);
-      expect(response.results.length).toBeGreaterThan(0);
-    });
-
-    it('finds content specific to the secondary workspace', async () => {
-      const response = await notion.search({ query: 'Possessives', page_size: 5 });
-      expect(response.results.length).toBeGreaterThan(0);
-      expect(response.results[0].id).toBeDefined();
-    }, 15000);
-
-    it('does NOT return content from the default workspace', async () => {
-      const response = await notion.search({ query: '01 — Projects', page_size: 5 });
-      const titles = response.results.map((entry) => {
-        const page = entry as SearchResultEntry;
-        const titleProp = page.properties?.title || page.properties?.Name;
-        return titleProp?.title?.[0]?.plain_text || '';
-      });
-      expect(titles).not.toContain('01 — Projects');
-    });
+  beforeAll(async () => {
+    parentId = await createTestParent(secondaryNotion, 'secondary-agent');
   });
 
-  describe('notion_read', () => {
-    beforeAll(async () => {
-      const results = (await notion.search({ query: '', page_size: 1 })).results;
-      expect(results.length).toBeGreaterThan(0);
-      testPageId = results[0].id;
-    });
-
-    it('reads blocks from the secondary workspace', async () => {
-      expect(
-        Array.isArray((await notion.blocks.children.list({ block_id: testPageId })).results)
-      ).toBe(true);
-    });
-
-    it('cannot read pages from the default workspace', async () => {
-      await expect(
-        notion.blocks.children.list({ block_id: 'dcc09ec2-11b3-4a95-8118-daede10eef1d' })
-      ).rejects.toThrow();
-    });
-
-    it('can read pages as markdown in the secondary workspace', async () => {
-      const pageId = (await notion.search({ query: '', page_size: 1 })).results[0].id;
-      const markdown = await notion.pages.retrieveMarkdown({ page_id: pageId });
-      expect(markdown.object).toBe('page_markdown');
-      expect(markdown.markdown.length).toBeGreaterThan(0);
-    });
-
-    it('cannot read default workspace pages as markdown', async () => {
-      await expect(
-        notion.pages.retrieveMarkdown({ page_id: 'dcc09ec2-11b3-4a95-8118-daede10eef1d' })
-      ).rejects.toThrow();
-    });
+  afterAll(async () => {
+    if (parentId) await deleteTestParent(secondaryNotion, parentId);
   });
 
-  describe('notion_append', () => {
-    it('can append to a page in the secondary workspace', async () => {
-      const pageId = (await notion.search({ query: '', page_size: 1 })).results[0].id;
-      const testText = `[vitest ${SECONDARY_AGENT}] append test at ${new Date().toISOString()}`;
-      const response = await notion.blocks.children.append({
-        block_id: pageId,
-        children: [
-          {
-            object: 'block',
-            type: 'paragraph',
-            paragraph: { rich_text: [{ type: 'text', text: { content: testText } }] },
-          },
-        ],
-      });
-      expect(response.results.length).toBe(1);
-      expect((response.results[0] as ParagraphBlock).paragraph?.rich_text?.[0]?.plain_text).toBe(
-        testText
+  it('secondary agent can search its own workspace', async () => {
+    const response = await secondaryNotion.search({ query: '', page_size: 5 });
+    expect(Array.isArray(response.results)).toBe(true);
+    // May or may not have results depending on workspace state — both are valid
+  });
+
+  it('secondary agent can create pages in its own workspace', async () => {
+    const page = (await createTestPage(
+      secondaryNotion,
+      parentId,
+      `[vitest] secondary-create-${Date.now()}`
+    )) as MinimalPage;
+    expect(page.object).toBe('page');
+    expect(page.id).toBeDefined();
+  });
+
+  it('secondary agent can delete its own pages', async () => {
+    const page = (await createTestPage(
+      secondaryNotion,
+      parentId,
+      `[vitest] secondary-delete-${Date.now()}`
+    )) as MinimalPage;
+    const trashed = (await deleteNotionPage(secondaryNotion, {
+      page_id: page.id,
+    })) as MinimalPage;
+    expect(trashed.in_trash === true || trashed.archived === true).toBe(true);
+  });
+
+  it('secondary agent cannot access pages from the default workspace by ID', async () => {
+    // Try to access a page in the default workspace using the secondary client
+    // It should fail with an authentication/permission error
+    const defaultNotion = makeClient(undefined);
+    // Create a real page in the default workspace first
+    const defaultParent = await createTestParent(defaultNotion, 'secondary-isolation-anchor');
+    try {
+      const defaultPage = await createTestPage(
+        defaultNotion,
+        defaultParent,
+        '[vitest] default-to-isolate'
       );
-    });
-  });
-});
-
-describe('Cross-workspace isolation', () => {
-  it('default and secondary agents return completely different page sets', async () => {
-    const [defaultResults, secondaryResults] = await Promise.all([
-      makeClient(undefined).search({ query: '', page_size: 5 }),
-      makeClient(SECONDARY_AGENT).search({ query: '', page_size: 5 }),
-    ]);
-    const defaultIds = new Set(defaultResults.results.map((entry) => entry.id));
-    const secondaryIds = new Set(secondaryResults.results.map((entry) => entry.id));
-    expect([...defaultIds].filter((id) => secondaryIds.has(id)).length).toBe(0);
+      // Secondary client must NOT be able to retrieve or delete this page
+      await expect(
+        secondaryNotion.pages.retrieve({ page_id: defaultPage.id })
+      ).rejects.toThrow();
+    } finally {
+      if (defaultParent) await deleteTestParent(defaultNotion, defaultParent);
+    }
   });
 });

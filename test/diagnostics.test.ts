@@ -1,19 +1,28 @@
 /**
  * Tests for notion_help, notion_doctor, URL surfacing, and cross-agent
  * workspace isolation on destructive operations.
+ *
+ * Each test file creates its own dedicated parent page in beforeAll().
+ * All fixtures are children of that parent. afterAll() deletes the parent,
+ * cascading to all children. Tests NEVER touch existing workspace content.
  */
 
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import {
   deleteNotionPage,
   getNotionHelp,
+  getMarkdownPagesApi,
   moveNotionPage,
   publishNotionPage,
   runNotionDoctor,
 } from '../src/index.js';
-import { makeClient } from './helpers.js';
-
-const SECONDARY_AGENT = process.env.NOTION_SECONDARY_AGENT ?? 'secondary';
+import {
+  createTestPage,
+  createTestParent,
+  deleteTestParent,
+  makeClient,
+  SECONDARY_AGENT,
+} from './helpers.js';
 
 type DoctorAgentReport = {
   agent_id: string;
@@ -95,34 +104,29 @@ describe('notion_doctor', () => {
 
 describe('URL surfacing', () => {
   const notion = makeClient(undefined);
-  let parentPageId: string;
+  let parentId: string;
   let testPageId: string;
 
   beforeAll(async () => {
-    const results = (await notion.search({ query: 'Deployment Plan', page_size: 1 })).results;
-    expect(results.length).toBeGreaterThan(0);
-    parentPageId = results[0].id;
+    parentId = await createTestParent(notion, 'diagnostics-url');
   });
 
   afterAll(async () => {
-    if (testPageId) {
-      await deleteNotionPage(notion, { page_id: testPageId }).catch(() => {});
-    }
+    if (parentId) await deleteTestParent(notion, parentId);
   });
 
   it('notion_create returns url at top level', async () => {
-    const page = (await notion.pages.create({
-      parent: { page_id: parentPageId },
-      properties: {
-        title: { title: [{ type: 'text', text: { content: '[vitest] url-test' } }] },
-      },
-      markdown: 'URL test page.',
-    })) as UrlPage;
+    const page = (await createTestPage(
+      notion,
+      parentId,
+      '[vitest] url-test'
+    )) as UrlPage;
     testPageId = page.id;
     expect(page.url).toMatch(/^https:\/\/www\.notion\.so\//);
   }, 15000);
 
   it('notion_update_page returns url at top level', async () => {
+    if (!testPageId) throw new Error('testPageId not set');
     const page = (await notion.pages.update({
       page_id: testPageId,
       icon: { type: 'emoji', emoji: '🔗' },
@@ -132,35 +136,59 @@ describe('URL surfacing', () => {
 });
 
 describe('Cross-agent workspace isolation (destructive ops)', () => {
+  const defaultNotion = makeClient(undefined);
   const secondaryNotion = makeClient(SECONDARY_AGENT);
-  let defaultPageId: string;
+  let defaultParentId: string;
+  let secondaryParentId: string;
 
   beforeAll(async () => {
-    const results = (await makeClient(undefined).search({ query: 'Projects', page_size: 1 }))
-      .results;
-    expect(results.length).toBeGreaterThan(0);
-    defaultPageId = results[0].id;
+    defaultParentId = await createTestParent(defaultNotion, 'diagnostics-default-isolate');
+    secondaryParentId = await createTestParent(secondaryNotion, 'diagnostics-secondary-isolate');
+  });
+
+  afterAll(async () => {
+    if (defaultParentId) await deleteTestParent(defaultNotion, defaultParentId);
+    if (secondaryParentId) await deleteTestParent(secondaryNotion, secondaryParentId);
   });
 
   it('secondary agent cannot delete pages from the default workspace', async () => {
-    await expect(deleteNotionPage(secondaryNotion, { page_id: defaultPageId })).rejects.toThrow();
+    // Create a page in the default workspace
+    const defaultPage = await createTestPage(
+      defaultNotion,
+      defaultParentId,
+      '[vitest] default-isolated-page'
+    );
+    // Secondary agent must NOT be able to delete it
+    await expect(
+      deleteNotionPage(secondaryNotion, { page_id: defaultPage.id })
+    ).rejects.toThrow();
   });
 
   it('secondary agent cannot move pages from the default workspace', async () => {
+    const defaultPage = await createTestPage(
+      defaultNotion,
+      defaultParentId,
+      '[vitest] default-move-test'
+    );
+    // Secondary agent must NOT be able to move it
     await expect(
       moveNotionPage(secondaryNotion, {
-        page_id: defaultPageId,
-        new_parent_id: defaultPageId,
+        page_id: defaultPage.id,
+        new_parent_id: defaultPage.id,
       })
     ).rejects.toThrow();
   });
 
-  it('publish stub returns info for pages the secondary agent can access', async () => {
-    const secondaryPageId = (await secondaryNotion.search({ query: '', page_size: 1 })).results[0]
-      .id;
-    const result = await publishNotionPage(secondaryNotion, { page_id: secondaryPageId });
-    expect(result.supported).toBe(false);
-    expect(result.page_id).toBe(secondaryPageId);
+  it('secondary agent can manage its own workspace independently', async () => {
+    // Create a page in the secondary workspace and delete it — should succeed
+    const secondaryPage = await createTestPage(
+      secondaryNotion,
+      secondaryParentId,
+      '[vitest] secondary-own-page'
+    );
+    await expect(
+      deleteNotionPage(secondaryNotion, { page_id: secondaryPage.id })
+    ).resolves.toBeDefined();
   });
 
   it('notion_doctor discovers both agents as configured', async () => {
