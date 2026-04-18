@@ -65,89 +65,106 @@ const DB_PATH = path.join(
   'notion-operations.db'
 );
 
-// Ensure directory exists
-const dbDir = path.dirname(DB_PATH);
-if (!fs.existsSync(dbDir)) {
-  fs.mkdirSync(dbDir, { recursive: true });
+// Lazy-initialise the database connection and prepared statements. Deferring
+// avoids loading the better-sqlite3 native binary at import time, which breaks
+// test runners that don't need (or can't build) the addon.
+let _db: InstanceType<typeof Database> | null = null;
+let _insertOp: ReturnType<InstanceType<typeof Database>['prepare']>;
+let _insertRequest: ReturnType<InstanceType<typeof Database>['prepare']>;
+let _insertResponse: ReturnType<InstanceType<typeof Database>['prepare']>;
+
+function getDb() {
+  if (_db) return _db;
+
+  const dbDir = path.dirname(DB_PATH);
+  if (!fs.existsSync(dbDir)) {
+    fs.mkdirSync(dbDir, { recursive: true });
+  }
+
+  // Build the connection and schema in a local variable first. Only promote
+  // to the module-level singleton after everything succeeds, so a partial
+  // failure (e.g. exec/prepare throws) doesn't leave _db set with
+  // uninitialised prepared statements.
+  const db = new Database(DB_PATH);
+  db.pragma('journal_mode = WAL');
+  db.pragma('foreign_keys = ON');
+
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS notion_operations (
+      id                 INTEGER PRIMARY KEY,
+      timestamp          TEXT    NOT NULL,
+      agent_id           TEXT,
+      session_id         TEXT,
+      test_run           INTEGER NOT NULL DEFAULT 0,
+      operation          TEXT    NOT NULL,
+      tool_name          TEXT    NOT NULL,
+      target_page_id     TEXT,
+      target_database_id TEXT,
+      parent_page_id     TEXT,
+      local_path         TEXT,
+      sync_direction     TEXT,
+      status             TEXT    NOT NULL,
+      error_code         TEXT,
+      error_message      TEXT,
+      notion_request_id  TEXT,
+      duration_ms        INTEGER,
+      state_before       TEXT,
+      state_after        TEXT,
+      request_id         INTEGER REFERENCES notion_raw_requests(id),
+      response_id        INTEGER REFERENCES notion_raw_responses(id)
+    );
+
+    CREATE TABLE IF NOT EXISTS notion_raw_requests (
+      id       INTEGER PRIMARY KEY,
+      body     TEXT    NOT NULL,
+      url      TEXT    NOT NULL,
+      method   TEXT    NOT NULL,
+      headers  TEXT
+    );
+
+    CREATE TABLE IF NOT EXISTS notion_raw_responses (
+      id           INTEGER PRIMARY KEY,
+      status_code  INTEGER,
+      body         TEXT,
+      headers      TEXT
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_ops_timestamp    ON notion_operations(timestamp);
+    CREATE INDEX IF NOT EXISTS idx_ops_agent       ON notion_operations(agent_id);
+    CREATE INDEX IF NOT EXISTS idx_ops_target_page  ON notion_operations(target_page_id);
+    CREATE INDEX IF NOT EXISTS idx_ops_operation   ON notion_operations(operation);
+    CREATE INDEX IF NOT EXISTS idx_ops_session     ON notion_operations(session_id);
+    CREATE INDEX IF NOT EXISTS idx_ops_test_run    ON notion_operations(test_run) WHERE test_run = 1;
+  `);
+
+  _insertOp = db.prepare(`
+    INSERT INTO notion_operations (
+      timestamp, agent_id, session_id, test_run, operation, tool_name,
+      target_page_id, target_database_id, parent_page_id, local_path,
+      sync_direction, status, error_code, error_message, notion_request_id,
+      duration_ms, state_before, state_after, request_id, response_id
+    ) VALUES (
+      @timestamp, @agent_id, @session_id, @test_run, @operation, @tool_name,
+      @target_page_id, @target_database_id, @parent_page_id, @local_path,
+      @sync_direction, @status, @error_code, @error_message, @notion_request_id,
+      @duration_ms, @state_before, @state_after, @request_id, @response_id
+    )
+  `);
+
+  _insertRequest = db.prepare(`
+    INSERT INTO notion_raw_requests (body, url, method, headers)
+    VALUES (@body, @url, @method, @headers)
+  `);
+
+  _insertResponse = db.prepare(`
+    INSERT INTO notion_raw_responses (status_code, body, headers)
+    VALUES (@status_code, @body, @headers)
+  `);
+
+  // All setup succeeded — promote to module singleton.
+  _db = db;
+  return _db;
 }
-
-const db = new Database(DB_PATH);
-db.pragma('journal_mode = WAL');
-db.pragma('foreign_keys = ON');
-
-db.exec(`
-  CREATE TABLE IF NOT EXISTS notion_operations (
-    id                 INTEGER PRIMARY KEY,
-    timestamp          TEXT    NOT NULL,
-    agent_id           TEXT,
-    session_id         TEXT,
-    test_run           INTEGER NOT NULL DEFAULT 0,
-    operation          TEXT    NOT NULL,
-    tool_name          TEXT    NOT NULL,
-    target_page_id     TEXT,
-    target_database_id TEXT,
-    parent_page_id     TEXT,
-    local_path         TEXT,
-    sync_direction     TEXT,
-    status             TEXT    NOT NULL,
-    error_code         TEXT,
-    error_message      TEXT,
-    notion_request_id  TEXT,
-    duration_ms        INTEGER,
-    state_before       TEXT,
-    state_after        TEXT,
-    request_id         INTEGER REFERENCES notion_raw_requests(id),
-    response_id        INTEGER REFERENCES notion_raw_responses(id)
-  );
-
-  CREATE TABLE IF NOT EXISTS notion_raw_requests (
-    id       INTEGER PRIMARY KEY,
-    body     TEXT    NOT NULL,
-    url      TEXT    NOT NULL,
-    method   TEXT    NOT NULL,
-    headers  TEXT
-  );
-
-  CREATE TABLE IF NOT EXISTS notion_raw_responses (
-    id           INTEGER PRIMARY KEY,
-    status_code  INTEGER,
-    body         TEXT,
-    headers      TEXT
-  );
-
-  CREATE INDEX IF NOT EXISTS idx_ops_timestamp    ON notion_operations(timestamp);
-  CREATE INDEX IF NOT EXISTS idx_ops_agent       ON notion_operations(agent_id);
-  CREATE INDEX IF NOT EXISTS idx_ops_target_page  ON notion_operations(target_page_id);
-  CREATE INDEX IF NOT EXISTS idx_ops_operation   ON notion_operations(operation);
-  CREATE INDEX IF NOT EXISTS idx_ops_session     ON notion_operations(session_id);
-  CREATE INDEX IF NOT EXISTS idx_ops_test_run    ON notion_operations(test_run) WHERE test_run = 1;
-`);
-
-/* ─── Prepared statements ────────────────────────────────────────────────── */
-
-const insertOp = db.prepare(`
-  INSERT INTO notion_operations (
-    timestamp, agent_id, session_id, test_run, operation, tool_name,
-    target_page_id, target_database_id, parent_page_id, local_path,
-    sync_direction, status, error_code, error_message, notion_request_id,
-    duration_ms, state_before, state_after, request_id, response_id
-  ) VALUES (
-    @timestamp, @agent_id, @session_id, @test_run, @operation, @tool_name,
-    @target_page_id, @target_database_id, @parent_page_id, @local_path,
-    @sync_direction, @status, @error_code, @error_message, @notion_request_id,
-    @duration_ms, @state_before, @state_after, @request_id, @response_id
-  )
-`);
-
-const insertRequest = db.prepare(`
-  INSERT INTO notion_raw_requests (body, url, method, headers)
-  VALUES (@body, @url, @method, @headers)
-`);
-
-const insertResponse = db.prepare(`
-  INSERT INTO notion_raw_responses (status_code, body, headers)
-  VALUES (@status_code, @body, @headers)
-`);
 
 /* ─── Audit logger ───────────────────────────────────────────────────────── */
 
@@ -167,12 +184,13 @@ export function getAuditContext(): AuditContext {
 
 export function logOperation(opts: LogOptions): number {
   const { rawRequest, rawResponse, ...rest } = opts;
+  getDb(); // ensure lazy init
 
   let requestId: number | undefined;
   let responseId: number | undefined;
 
   if (rawRequest) {
-    requestId = insertRequest.run({
+    requestId = _insertRequest.run({
       body: JSON.stringify(rawRequest),
       url: rawRequestUrl(rawRequest),
       method: rawRequestMethod(rawRequest),
@@ -181,14 +199,14 @@ export function logOperation(opts: LogOptions): number {
   }
 
   if (rawResponse) {
-    responseId = insertResponse.run({
+    responseId = _insertResponse.run({
       status_code: rawResponseStatusCode(rawResponse),
       body: JSON.stringify(rawResponse),
       headers: JSON.stringify(rawResponseHeaders(rawResponse)),
     }).lastInsertRowid as number;
   }
 
-  const result = insertOp.run({
+  const result = _insertOp.run({
     timestamp: new Date().toISOString(),
     agent_id: context.agentId,
     session_id: context.sessionId ?? null,
@@ -278,7 +296,7 @@ export function getOperations(opts: {
   const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
   const limit = opts.limit ?? 100;
 
-  const rows = db
+  const rows = getDb()
     .prepare(`SELECT * FROM notion_operations ${where} ORDER BY timestamp DESC LIMIT ${limit}`)
     .all(params) as Record<string, unknown>[];
 

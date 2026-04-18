@@ -10,6 +10,8 @@
 
 import { Type } from '@sinclair/typebox';
 import { definePluginEntry } from 'openclaw/plugin-sdk/plugin-entry';
+import type { Operation } from './audit.js';
+import { logOperation, setAuditContext } from './audit.js';
 import { getClient, getMarkdownPagesApi } from './client.js';
 import { DEFAULT_PAGE_SIZE } from './constants.js';
 import { asJsonContent, asTextContent, wrapPageResponse } from './format.js';
@@ -46,6 +48,63 @@ const textBlock = (text: string) => ({
   },
 });
 
+/**
+ * Audit-logging wrapper for tool execution.
+ *
+ * Measures wall-clock duration, sets the agent-scoped audit context,
+ * and logs both success and error outcomes to the SQLite audit trail.
+ * This avoids duplicating the try/catch + logOperation boilerplate in
+ * every tool's execute() body.
+ */
+async function withAudit<T>(opts: {
+  operation: Operation;
+  toolName: string;
+  agentId: string | undefined;
+  targetPageId?: string;
+  targetDatabaseId?: string;
+  parentPageId?: string;
+  localPath?: string;
+  syncDirection?: 'push' | 'pull' | 'auto';
+  fn: () => Promise<T>;
+}): Promise<T> {
+  const start = Date.now();
+  // Build the shared audit payload once to avoid duplication between branches.
+  const base = {
+    operation: opts.operation,
+    toolName: opts.toolName,
+    targetPageId: opts.targetPageId,
+    targetDatabaseId: opts.targetDatabaseId,
+    parentPageId: opts.parentPageId,
+    localPath: opts.localPath,
+    syncDirection: opts.syncDirection,
+  };
+  // Pass context directly instead of mutating the module-global via
+  // setAuditContext, which races when concurrent tool calls overlap.
+  setAuditContext({ agentId: opts.agentId ?? 'default' });
+  try {
+    const result = await opts.fn();
+    try {
+      logOperation({ ...base, status: 'success', durationMs: Date.now() - start });
+    } catch {
+      // Audit write failed (SQLite busy, disk error, etc.) — never let a
+      // logging fault crash a successful tool call.
+    }
+    return result;
+  } catch (error) {
+    try {
+      logOperation({
+        ...base,
+        status: 'error',
+        errorMessage: error instanceof Error ? error.message : String(error),
+        durationMs: Date.now() - start,
+      });
+    } catch {
+      // Same: swallow audit failures so the original error propagates.
+    }
+    throw error;
+  }
+}
+
 // ── Plugin definition ───────────────────────────────────────────────────
 
 export default definePluginEntry({
@@ -65,8 +124,17 @@ export default definePluginEntry({
         }),
       }),
       async execute(_id, params) {
-        const notion = getClient(ctx.agentId);
-        return asJsonContent((await notion.search({ query: params.query, page_size: 10 })).results);
+        return withAudit({
+          operation: 'search',
+          toolName: 'notion_search',
+          agentId: ctx.agentId,
+          fn: async () => {
+            const notion = getClient(ctx.agentId);
+            return asJsonContent(
+              (await notion.search({ query: params.query, page_size: 10 })).results
+            );
+          },
+        });
       },
     }));
 
@@ -79,10 +147,18 @@ export default definePluginEntry({
         page_id: Type.String({ description: 'The UUID of the Notion page to read.' }),
       }),
       async execute(_id, params) {
-        const notion = getClient(ctx.agentId);
-        return asJsonContent(
-          (await notion.blocks.children.list({ block_id: params.page_id })).results
-        );
+        return withAudit({
+          operation: 'read',
+          toolName: 'notion_read',
+          agentId: ctx.agentId,
+          targetPageId: params.page_id,
+          fn: async () => {
+            const notion = getClient(ctx.agentId);
+            return asJsonContent(
+              (await notion.blocks.children.list({ block_id: params.page_id })).results
+            );
+          },
+        });
       },
     }));
 
@@ -96,15 +172,23 @@ export default definePluginEntry({
         text: Type.String({ description: 'The plain text content to append.' }),
       }),
       async execute(_id, params) {
-        const notion = getClient(ctx.agentId);
-        return asJsonContent(
-          (
-            await notion.blocks.children.append({
-              block_id: params.page_id,
-              children: [textBlock(params.text)],
-            })
-          ).results
-        );
+        return withAudit({
+          operation: 'append',
+          toolName: 'notion_append',
+          agentId: ctx.agentId,
+          targetPageId: params.page_id,
+          fn: async () => {
+            const notion = getClient(ctx.agentId);
+            return asJsonContent(
+              (
+                await notion.blocks.children.append({
+                  block_id: params.page_id,
+                  children: [textBlock(params.text)],
+                })
+              ).results
+            );
+          },
+        });
       },
     }));
 
@@ -119,19 +203,27 @@ export default definePluginEntry({
         title: Type.Optional(Type.String({ description: 'Optional page title.' })),
       }),
       async execute(_id, params) {
-        const notion = getClient(ctx.agentId);
-        const response = (await notion.pages.create({
-          parent: { page_id: params.parent_id },
-          properties: params.title
-            ? {
-                title: {
-                  title: [{ type: 'text', text: { content: params.title } }],
-                },
-              }
-            : undefined,
-          markdown: params.markdown,
-        })) as AnyPage;
-        return asJsonContent(wrapPageResponse(response));
+        return withAudit({
+          operation: 'create',
+          toolName: 'notion_create',
+          agentId: ctx.agentId,
+          parentPageId: params.parent_id,
+          fn: async () => {
+            const notion = getClient(ctx.agentId);
+            const response = (await notion.pages.create({
+              parent: { page_id: params.parent_id },
+              properties: params.title
+                ? {
+                    title: {
+                      title: [{ type: 'text', text: { content: params.title } }],
+                    },
+                  }
+                : undefined,
+              markdown: params.markdown,
+            })) as AnyPage;
+            return asJsonContent(wrapPageResponse(response));
+          },
+        });
       },
     }));
 
@@ -144,11 +236,19 @@ export default definePluginEntry({
         page_id: Type.String({ description: 'The UUID of the Notion page to read.' }),
       }),
       async execute(_id, params) {
-        return asJsonContent(
-          await getMarkdownPagesApi(getClient(ctx.agentId)).retrieveMarkdown({
-            page_id: params.page_id,
-          })
-        );
+        return withAudit({
+          operation: 'read',
+          toolName: 'notion_read_markdown',
+          agentId: ctx.agentId,
+          targetPageId: params.page_id,
+          fn: async () => {
+            return asJsonContent(
+              await getMarkdownPagesApi(getClient(ctx.agentId)).retrieveMarkdown({
+                page_id: params.page_id,
+              })
+            );
+          },
+        });
       },
     }));
 
@@ -162,14 +262,22 @@ export default definePluginEntry({
         content: Type.String({ description: 'The new markdown content for the page.' }),
       }),
       async execute(_id, params) {
-        const notion = getClient(ctx.agentId);
-        const response = await getMarkdownPagesApi(getClient(ctx.agentId)).updateMarkdown({
-          page_id: params.page_id,
-          type: 'replace_content',
-          replace_content: { new_str: params.content },
+        return withAudit({
+          operation: 'update_markdown',
+          toolName: 'notion_update_markdown',
+          agentId: ctx.agentId,
+          targetPageId: params.page_id,
+          fn: async () => {
+            const notion = getClient(ctx.agentId);
+            const response = await getMarkdownPagesApi(notion).updateMarkdown({
+              page_id: params.page_id,
+              type: 'replace_content',
+              replace_content: { new_str: params.content },
+            });
+            const page = (await notion.pages.retrieve({ page_id: params.page_id })) as AnyPage;
+            return asJsonContent({ url: page.url ?? null, response });
+          },
         });
-        const page = (await notion.pages.retrieve({ page_id: params.page_id })) as AnyPage;
-        return asJsonContent({ url: page.url ?? null, response });
       },
     }));
 
@@ -186,21 +294,31 @@ export default definePluginEntry({
         ),
       }),
       async execute(_id, params) {
-        const notion = getClient(ctx.agentId);
-        const currentPage = (await notion.pages.retrieve({ page_id: params.page_id })) as AnyPage;
-        const titleProperty = findTitlePropertyName(currentPage.properties) ?? 'title';
-        const response = await notion.pages.update({
-          page_id: params.page_id,
-          icon: params.icon_emoji ? { type: 'emoji', emoji: params.icon_emoji } : undefined,
-          properties: params.title
-            ? {
-                [titleProperty]: {
-                  title: [{ type: 'text', text: { content: params.title } }],
-                },
-              }
-            : undefined,
+        return withAudit({
+          operation: 'update',
+          toolName: 'notion_update_page',
+          agentId: ctx.agentId,
+          targetPageId: params.page_id,
+          fn: async () => {
+            const notion = getClient(ctx.agentId);
+            const currentPage = (await notion.pages.retrieve({
+              page_id: params.page_id,
+            })) as AnyPage;
+            const titleProperty = findTitlePropertyName(currentPage.properties) ?? 'title';
+            const response = await notion.pages.update({
+              page_id: params.page_id,
+              icon: params.icon_emoji ? { type: 'emoji', emoji: params.icon_emoji } : undefined,
+              properties: params.title
+                ? {
+                    [titleProperty]: {
+                      title: [{ type: 'text', text: { content: params.title } }],
+                    },
+                  }
+                : undefined,
+            });
+            return asJsonContent(wrapPageResponse(response));
+          },
         });
-        return asJsonContent(wrapPageResponse(response));
       },
     }));
 
@@ -214,12 +332,20 @@ export default definePluginEntry({
         text: Type.String({ description: 'The comment text.' }),
       }),
       async execute(_id, params) {
-        return asJsonContent(
-          await getClient(ctx.agentId).comments.create({
-            parent: { page_id: params.page_id },
-            rich_text: [{ type: 'text', text: { content: params.text } }],
-          })
-        );
+        return withAudit({
+          operation: 'comment_create',
+          toolName: 'notion_comment_create',
+          agentId: ctx.agentId,
+          targetPageId: params.page_id,
+          fn: async () => {
+            return asJsonContent(
+              await getClient(ctx.agentId).comments.create({
+                parent: { page_id: params.page_id },
+                rich_text: [{ type: 'text', text: { content: params.text } }],
+              })
+            );
+          },
+        });
       },
     }));
 
@@ -234,9 +360,17 @@ export default definePluginEntry({
         }),
       }),
       async execute(_id, params) {
-        return asJsonContent(
-          (await getClient(ctx.agentId).comments.list({ block_id: params.page_id })).results
-        );
+        return withAudit({
+          operation: 'comment_list',
+          toolName: 'notion_comment_list',
+          agentId: ctx.agentId,
+          targetPageId: params.page_id,
+          fn: async () => {
+            return asJsonContent(
+              (await getClient(ctx.agentId).comments.list({ block_id: params.page_id })).results
+            );
+          },
+        });
       },
     }));
 
@@ -254,7 +388,15 @@ export default definePluginEntry({
         ),
       }),
       async execute(_id, params) {
-        return asJsonContent(await queryNotionDatabase(getClient(ctx.agentId), params));
+        return withAudit({
+          operation: 'query',
+          toolName: 'notion_query',
+          agentId: ctx.agentId,
+          targetDatabaseId: params.database_id,
+          fn: async () => {
+            return asJsonContent(await queryNotionDatabase(getClient(ctx.agentId), params));
+          },
+        });
       },
     }));
 
@@ -265,7 +407,15 @@ export default definePluginEntry({
       description: 'Move a Notion page to trash.',
       parameters: Type.Object({ page_id: Type.String({ description: 'Page ID to trash.' }) }),
       async execute(_id, params) {
-        return asJsonContent(await deleteNotionPage(getClient(ctx.agentId), params));
+        return withAudit({
+          operation: 'delete',
+          toolName: 'notion_delete',
+          agentId: ctx.agentId,
+          targetPageId: params.page_id,
+          fn: async () => {
+            return asJsonContent(await deleteNotionPage(getClient(ctx.agentId), params));
+          },
+        });
       },
     }));
 
@@ -279,7 +429,16 @@ export default definePluginEntry({
         new_parent_id: Type.String({ description: 'Destination parent page ID.' }),
       }),
       async execute(_id, params) {
-        return asJsonContent(await moveNotionPage(getClient(ctx.agentId), params));
+        return withAudit({
+          operation: 'move',
+          toolName: 'notion_move',
+          agentId: ctx.agentId,
+          targetPageId: params.page_id,
+          parentPageId: params.new_parent_id,
+          fn: async () => {
+            return asJsonContent(await moveNotionPage(getClient(ctx.agentId), params));
+          },
+        });
       },
     }));
 
@@ -296,7 +455,15 @@ export default definePluginEntry({
         ),
       }),
       async execute(_id, params) {
-        return asJsonContent(await publishNotionPage(getClient(ctx.agentId), params));
+        return withAudit({
+          operation: 'update',
+          toolName: 'notion_publish',
+          agentId: ctx.agentId,
+          targetPageId: params.page_id,
+          fn: async () => {
+            return asJsonContent(await publishNotionPage(getClient(ctx.agentId), params));
+          },
+        });
       },
     }));
 
@@ -312,7 +479,15 @@ export default definePluginEntry({
         ),
       }),
       async execute(_id, params) {
-        return asJsonContent(await getNotionFileTree(getClient(ctx.agentId), params));
+        return withAudit({
+          operation: 'file_tree',
+          toolName: 'notion_file_tree',
+          agentId: ctx.agentId,
+          targetPageId: params.page_id,
+          fn: async () => {
+            return asJsonContent(await getNotionFileTree(getClient(ctx.agentId), params));
+          },
+        });
       },
     }));
 
@@ -328,16 +503,35 @@ export default definePluginEntry({
           Type.String({ description: 'Parent page ID when creating a new page.' })
         ),
         direction: Type.Optional(
-          Type.String({ description: 'push, pull, or auto. Defaults to "auto".' })
+          Type.Union([Type.Literal('push'), Type.Literal('pull'), Type.Literal('auto')], {
+            description: 'push, pull, or auto. Defaults to "auto".',
+          })
         ),
       }),
       async execute(_id, params) {
-        return asJsonContent(await syncNotionFile(getClient(ctx.agentId), params as SyncParams));
+        // Sync direction is resolved at runtime, so we log the direction from params
+        // or fall back to 'auto'. The actual direction chosen is in the result.
+        const direction: 'push' | 'pull' | 'auto' = (params as SyncParams).direction ?? 'auto';
+        const operation = `sync_${direction}` as Operation;
+        return withAudit({
+          operation,
+          toolName: 'notion_sync',
+          agentId: ctx.agentId,
+          targetPageId: params.page_id,
+          parentPageId: params.parent_id,
+          localPath: params.path,
+          syncDirection: direction,
+          fn: async () => {
+            return asJsonContent(
+              await syncNotionFile(getClient(ctx.agentId), params as SyncParams)
+            );
+          },
+        });
       },
     }));
 
     // --- notion_help ---
-    api.registerTool(() => ({
+    api.registerTool((ctx) => ({
       name: 'notion_help',
       label: 'Notion Help',
       description: 'Return static documentation for all Notion tools.',
@@ -345,7 +539,14 @@ export default definePluginEntry({
         tool_name: Type.Optional(Type.String({ description: 'Optional tool name.' })),
       }),
       async execute(_id, params) {
-        return asTextContent(getNotionHelp(params.tool_name));
+        return withAudit({
+          operation: 'help',
+          toolName: 'notion_help',
+          agentId: ctx.agentId,
+          fn: async () => {
+            return asTextContent(getNotionHelp(params.tool_name));
+          },
+        });
       },
     }));
 
@@ -356,7 +557,14 @@ export default definePluginEntry({
       description: 'Run read-only diagnostics for Notion plugin setup.',
       parameters: Type.Object({}),
       async execute() {
-        return asJsonContent(await runNotionDoctor(ctx.agentId));
+        return withAudit({
+          operation: 'doctor',
+          toolName: 'notion_doctor',
+          agentId: ctx.agentId,
+          fn: async () => {
+            return asJsonContent(await runNotionDoctor(ctx.agentId));
+          },
+        });
       },
     }));
   },
