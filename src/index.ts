@@ -68,34 +68,39 @@ async function withAudit<T>(opts: {
   fn: () => Promise<T>;
 }): Promise<T> {
   const start = Date.now();
+  // Build the shared audit payload once to avoid duplication between branches.
+  const base = {
+    operation: opts.operation,
+    toolName: opts.toolName,
+    targetPageId: opts.targetPageId,
+    targetDatabaseId: opts.targetDatabaseId,
+    parentPageId: opts.parentPageId,
+    localPath: opts.localPath,
+    syncDirection: opts.syncDirection,
+  };
+  // Pass context directly instead of mutating the module-global via
+  // setAuditContext, which races when concurrent tool calls overlap.
   setAuditContext({ agentId: opts.agentId ?? 'default' });
   try {
     const result = await opts.fn();
-    logOperation({
-      operation: opts.operation,
-      toolName: opts.toolName,
-      targetPageId: opts.targetPageId,
-      targetDatabaseId: opts.targetDatabaseId,
-      parentPageId: opts.parentPageId,
-      localPath: opts.localPath,
-      syncDirection: opts.syncDirection,
-      status: 'success',
-      durationMs: Date.now() - start,
-    });
+    try {
+      logOperation({ ...base, status: 'success', durationMs: Date.now() - start });
+    } catch {
+      // Audit write failed (SQLite busy, disk error, etc.) — never let a
+      // logging fault crash a successful tool call.
+    }
     return result;
   } catch (error) {
-    logOperation({
-      operation: opts.operation,
-      toolName: opts.toolName,
-      targetPageId: opts.targetPageId,
-      targetDatabaseId: opts.targetDatabaseId,
-      parentPageId: opts.parentPageId,
-      localPath: opts.localPath,
-      syncDirection: opts.syncDirection,
-      status: 'error',
-      errorMessage: error instanceof Error ? error.message : String(error),
-      durationMs: Date.now() - start,
-    });
+    try {
+      logOperation({
+        ...base,
+        status: 'error',
+        errorMessage: error instanceof Error ? error.message : String(error),
+        durationMs: Date.now() - start,
+      });
+    } catch {
+      // Same: swallow audit failures so the original error propagates.
+    }
     throw error;
   }
 }
@@ -264,7 +269,7 @@ export default definePluginEntry({
           targetPageId: params.page_id,
           fn: async () => {
             const notion = getClient(ctx.agentId);
-            const response = await getMarkdownPagesApi(getClient(ctx.agentId)).updateMarkdown({
+            const response = await getMarkdownPagesApi(notion).updateMarkdown({
               page_id: params.page_id,
               type: 'replace_content',
               replace_content: { new_str: params.content },
@@ -498,21 +503,24 @@ export default definePluginEntry({
           Type.String({ description: 'Parent page ID when creating a new page.' })
         ),
         direction: Type.Optional(
-          Type.String({ description: 'push, pull, or auto. Defaults to "auto".' })
+          Type.Union([Type.Literal('push'), Type.Literal('pull'), Type.Literal('auto')], {
+            description: 'push, pull, or auto. Defaults to "auto".',
+          })
         ),
       }),
       async execute(_id, params) {
         // Sync direction is resolved at runtime, so we log the direction from params
         // or fall back to 'auto'. The actual direction chosen is in the result.
-        const direction = (params as SyncParams).direction ?? 'auto';
+        const direction: 'push' | 'pull' | 'auto' = (params as SyncParams).direction ?? 'auto';
+        const operation = `sync_${direction}` as Operation;
         return withAudit({
-          operation: `sync_${direction}` as Operation,
+          operation,
           toolName: 'notion_sync',
           agentId: ctx.agentId,
           targetPageId: params.page_id,
           parentPageId: params.parent_id,
           localPath: params.path,
-          syncDirection: direction as 'push' | 'pull' | 'auto',
+          syncDirection: direction,
           fn: async () => {
             return asJsonContent(
               await syncNotionFile(getClient(ctx.agentId), params as SyncParams)

@@ -81,11 +81,15 @@ function getDb() {
     fs.mkdirSync(dbDir, { recursive: true });
   }
 
-  _db = new Database(DB_PATH);
-  _db.pragma('journal_mode = WAL');
-  _db.pragma('foreign_keys = ON');
+  // Build the connection and schema in a local variable first. Only promote
+  // to the module-level singleton after everything succeeds, so a partial
+  // failure (e.g. exec/prepare throws) doesn't leave _db set with
+  // uninitialised prepared statements.
+  const db = new Database(DB_PATH);
+  db.pragma('journal_mode = WAL');
+  db.pragma('foreign_keys = ON');
 
-  _db.exec(`
+  db.exec(`
     CREATE TABLE IF NOT EXISTS notion_operations (
       id                 INTEGER PRIMARY KEY,
       timestamp          TEXT    NOT NULL,
@@ -133,7 +137,7 @@ function getDb() {
     CREATE INDEX IF NOT EXISTS idx_ops_test_run    ON notion_operations(test_run) WHERE test_run = 1;
   `);
 
-  _insertOp = _db.prepare(`
+  _insertOp = db.prepare(`
     INSERT INTO notion_operations (
       timestamp, agent_id, session_id, test_run, operation, tool_name,
       target_page_id, target_database_id, parent_page_id, local_path,
@@ -147,16 +151,18 @@ function getDb() {
     )
   `);
 
-  _insertRequest = _db.prepare(`
+  _insertRequest = db.prepare(`
     INSERT INTO notion_raw_requests (body, url, method, headers)
     VALUES (@body, @url, @method, @headers)
   `);
 
-  _insertResponse = _db.prepare(`
+  _insertResponse = db.prepare(`
     INSERT INTO notion_raw_responses (status_code, body, headers)
     VALUES (@status_code, @body, @headers)
   `);
 
+  // All setup succeeded — promote to module singleton.
+  _db = db;
   return _db;
 }
 
