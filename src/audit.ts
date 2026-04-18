@@ -256,6 +256,114 @@ function rawResponseHeaders(res: object): Record<string, string> {
 
 /* ─── Query helpers ──────────────────────────────────────────────────────── */
 
+/**
+ * Extended audit log reader supporting all filterable columns.
+ *
+ * Unlike {@link getOperations} (which predates the tool surface), this function
+ * covers every filter the `notion_logs_read` tool exposes, including tool_name,
+ * status, session_id, and target_database_id, and optionally JOINs the raw
+ * request/response tables so callers can inspect full HTTP payloads.
+ */
+export function readAuditLogs(opts: {
+  agentId?: string;
+  sessionId?: string;
+  operation?: string;
+  toolName?: string;
+  status?: 'success' | 'error';
+  targetPageId?: string;
+  targetDatabaseId?: string;
+  since?: string;
+  limit?: number;
+  includeRaw?: boolean;
+}) {
+  const db = getDb();
+  const conditions: string[] = [];
+  const params: Record<string, unknown> = {};
+
+  if (opts.agentId) {
+    conditions.push('o.agent_id = @agentId');
+    params.agentId = opts.agentId;
+  }
+  if (opts.sessionId) {
+    conditions.push('o.session_id = @sessionId');
+    params.sessionId = opts.sessionId;
+  }
+  if (opts.operation) {
+    conditions.push('o.operation = @operation');
+    params.operation = opts.operation;
+  }
+  if (opts.toolName) {
+    conditions.push('o.tool_name = @toolName');
+    params.toolName = opts.toolName;
+  }
+  if (opts.status) {
+    conditions.push('o.status = @status');
+    params.status = opts.status;
+  }
+  if (opts.targetPageId) {
+    conditions.push('o.target_page_id = @targetPageId');
+    params.targetPageId = opts.targetPageId;
+  }
+  if (opts.targetDatabaseId) {
+    conditions.push('o.target_database_id = @targetDatabaseId');
+    params.targetDatabaseId = opts.targetDatabaseId;
+  }
+  if (opts.since) {
+    conditions.push('o.timestamp >= @since');
+    params.since = opts.since;
+  }
+
+  const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
+  const limit = opts.limit ?? 20;
+
+  // When include_raw is true, JOIN the raw request/response tables so the
+  // caller can inspect full HTTP payloads for debugging.
+  if (opts.includeRaw) {
+    const sql = `
+      SELECT o.*,
+             req.url   AS raw_request_url,
+             req.method AS raw_request_method,
+             req.body   AS raw_request_body,
+             req.headers AS raw_request_headers,
+             res.status_code AS raw_response_status,
+             res.body   AS raw_response_body,
+             res.headers AS raw_response_headers
+        FROM notion_operations o
+        LEFT JOIN notion_raw_requests  req ON o.request_id  = req.id
+        LEFT JOIN notion_raw_responses res ON o.response_id = res.id
+        ${where}
+        ORDER BY o.timestamp DESC
+        LIMIT ${limit}`;
+    const rows = db.prepare(sql).all(params) as Record<string, unknown>[];
+    return rows.map((row) => ({
+      ...row,
+      state_before: row.state_before ? JSON.parse(row.state_before as string) : null,
+      state_after: row.state_after ? JSON.parse(row.state_after as string) : null,
+      raw_request_body: row.raw_request_body ? JSON.parse(row.raw_request_body as string) : null,
+      raw_request_headers: row.raw_request_headers
+        ? JSON.parse(row.raw_request_headers as string)
+        : null,
+      raw_response_body: row.raw_response_body ? JSON.parse(row.raw_response_body as string) : null,
+      raw_response_headers: row.raw_response_headers
+        ? JSON.parse(row.raw_response_headers as string)
+        : null,
+    }));
+  }
+
+  // Compact path: skip JOINs and omit state_before/state_after blobs to keep
+  // output concise. These columns are large and rarely needed in quick overviews.
+  const sql = `
+    SELECT o.id, o.timestamp, o.agent_id, o.session_id, o.test_run,
+           o.operation, o.tool_name, o.target_page_id, o.target_database_id,
+           o.parent_page_id, o.local_path, o.sync_direction, o.status,
+           o.error_code, o.error_message, o.notion_request_id, o.duration_ms
+      FROM notion_operations o
+      ${where}
+      ORDER BY o.timestamp DESC
+      LIMIT ${limit}`;
+  return db.prepare(sql).all(params) as Record<string, unknown>[];
+}
+
 export function getOperations(opts: {
   agentId?: string;
   operation?: Operation;
