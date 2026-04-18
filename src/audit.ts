@@ -268,7 +268,7 @@ function rawResponseHeaders(res: object): Record<string, string> {
  * Returns `null` when the value is nullish, non-string, or unparseable,
  * so a single corrupt row can't break an entire audit log read.
  */
-function safeJsonParse(value: unknown): unknown | null {
+export function safeJsonParse(value: unknown): unknown | null {
   if (value == null) return null;
   if (typeof value !== 'string') return null;
   try {
@@ -282,7 +282,7 @@ function safeJsonParse(value: unknown): unknown | null {
  * Redact sensitive fields (Authorization headers, tokens) from a parsed
  * request body object so raw log reads don't leak credentials.
  */
-function redactSensitiveFields(obj: unknown): unknown {
+export function redactSensitiveFields(obj: unknown): unknown {
   if (obj == null || typeof obj !== 'object') return obj;
   const record = obj as Record<string, unknown>;
   const result: Record<string, unknown> = {};
@@ -306,7 +306,7 @@ function redactSensitiveFields(obj: unknown): unknown {
  * Rejects NaN, fractional, and negative values that could cause unexpected
  * SQLite behaviour (e.g. `LIMIT -1` disables the cap entirely).
  */
-function clampLimit(raw: number | undefined, fallback = 20): number {
+export function clampLimit(raw: number | undefined, fallback = 20): number {
   const n = raw ?? fallback;
   if (!Number.isFinite(n) || !Number.isInteger(n)) return fallback;
   return Math.max(0, Math.min(n, 100));
