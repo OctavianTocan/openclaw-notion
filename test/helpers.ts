@@ -165,7 +165,9 @@ export async function deleteTestParent(notion: Client, parentId: string): Promis
   } catch (err) {
     // Already deleted — no-op
     const e = err as { code?: string };
-    if (e.code !== 'object_not_found') throw err;
+    // Deleted or its parent/ancestor was already deleted — nothing left to clean up.
+    if (e.code === 'object_not_found' || e.code === 'archived_ancestor') return;
+    throw err;
   }
 }
 
