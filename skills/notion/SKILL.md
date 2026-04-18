@@ -47,7 +47,7 @@ description: Use when the user mentions Notion, links to Notion, asks about Noti
 
 ## Routing
 
-Tools automatically use the correct API key based on your agent identity. Wretch hits Tavi's workspace, Alaric hits Esther's workspace. No manual key handling needed. Cross-workspace access is blocked by design.
+Tools automatically use the correct API key based on your agent identity. Each agent is isolated to its own Notion workspace. No manual key handling needed. Cross-workspace access is blocked by design.
 
 ## Workflow
 

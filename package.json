@@ -1,11 +1,14 @@
 {
   "name": "openclaw-notion",
   "version": "1.0.0",
-  "description": "Native Notion integration for OpenClaw — 17 tools with markdown-first editing, sync, and multi-agent workspace isolation.",
+  "description": "Native Notion integration for OpenClaw \u2014 17 tools with markdown-first editing, sync, and multi-agent workspace isolation.",
   "main": "dist/index.js",
   "scripts": {
     "build": "tsc",
-    "test": "vitest run"
+    "test": "vitest run",
+    "lint": "biome check .",
+    "format": "biome format --write .",
+    "check": "biome check --write ."
   },
   "keywords": [
     "openclaw",
@@ -26,12 +29,14 @@
     "gray-matter": "^4.0.3"
   },
   "devDependencies": {
+    "@biomejs/biome": "^2.4.12",
     "@types/node": "^25.6.0",
     "openclaw": "^2026.4.15",
     "typescript": "^6.0.3",
     "vitest": "^4.1.4"
   },
   "type": "module",
+  "packageManager": "pnpm@10.33.0",
   "openclaw": {
     "extensions": [
       "./dist/index.js"
