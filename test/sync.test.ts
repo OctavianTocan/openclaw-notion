@@ -1,31 +1,34 @@
+/**
+ * Tests for notion_sync — push, pull, and auto sync between local files and Notion.
+ *
+ * Each test file creates its own dedicated parent page in beforeAll().
+ * All fixtures are children of that parent. afterAll() deletes the parent,
+ * cascading to all children. Tests NEVER touch existing workspace content.
+ */
+
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { deleteNotionPage, syncNotionFile } from '../src/index.js';
-import { makeClient } from './helpers.js';
+import { syncNotionFile } from '../src/index.js';
+import { createTestParent, deleteTestParent, makeClient } from './helpers.js';
 
 describe('notion_sync', () => {
   const notion = makeClient(undefined);
-  const createdPageIds: string[] = [];
-  let parentPageId: string;
+  let parentId: string;
   let tmpDir: string;
 
   beforeAll(async () => {
-    const results = (await notion.search({ query: 'Deployment Plan', page_size: 1 })).results;
-    expect(results.length).toBeGreaterThan(0);
-    parentPageId = results[0].id;
+    parentId = await createTestParent(notion, 'sync');
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'notion-sync-test-'));
   });
 
   afterAll(async () => {
-    for (const id of createdPageIds) {
-      await deleteNotionPage(notion, { page_id: id }).catch(() => {});
-    }
+    if (parentId) await deleteTestParent(notion, parentId);
     if (tmpDir) {
       fs.rmSync(tmpDir, { recursive: true, force: true });
     }
-  }, 15000);
+  });
 
   it('push: creates a new Notion page from a local file', async () => {
     const filePath = path.join(tmpDir, 'push-test.md');
@@ -42,11 +45,10 @@ Created by vitest.`,
 
     const result = await syncNotionFile(notion, {
       path: filePath,
-      parent_id: parentPageId,
+      parent_id: parentId,
       direction: 'push',
     });
 
-    createdPageIds.push(result.page_id);
     expect(result.direction).toBe('push');
     expect(result.url).toMatch(/^https:\/\/www\.notion\.so\//);
     expect(fs.readFileSync(filePath, 'utf8')).toContain(`notion_id: ${result.page_id}`);
@@ -65,10 +67,9 @@ title: Update Test
 
     const createResult = await syncNotionFile(notion, {
       path: filePath,
-      parent_id: parentPageId,
+      parent_id: parentId,
       direction: 'push',
     });
-    createdPageIds.push(createResult.page_id);
 
     fs.writeFileSync(
       filePath,
@@ -87,30 +88,37 @@ This was modified.`
   }, 25000);
 
   it('pull: downloads a Notion page to a local file', async () => {
-    const filePath = path.join(tmpDir, 'pull-test.md');
-    const pageId = createdPageIds[0];
+    // Create a page first via sync, then pull it
+    const filePath1 = path.join(tmpDir, 'pull-source.md');
+    fs.writeFileSync(filePath1, `# Pull Source\n\nContent to pull.`, 'utf8');
+    const created = await syncNotionFile(notion, {
+      path: filePath1,
+      parent_id: parentId,
+      direction: 'push',
+    });
 
+    const filePath2 = path.join(tmpDir, 'pull-test.md');
     const result = await syncNotionFile(notion, {
-      path: filePath,
-      page_id: pageId,
+      path: filePath2,
+      page_id: created.page_id,
       direction: 'pull',
     });
 
     expect(result.direction).toBe('pull');
-    expect(result.page_id).toBe(pageId);
-    expect(fs.existsSync(filePath)).toBe(true);
-    expect(fs.readFileSync(filePath, 'utf8')).toContain(pageId);
+    expect(result.page_id).toBe(created.page_id);
+    expect(fs.existsSync(filePath2)).toBe(true);
+    expect(fs.readFileSync(filePath2, 'utf8')).toContain(created.page_id);
   }, 20000);
 
   it('auto: pulls when remote is newer than local', async () => {
     const filePath = path.join(tmpDir, 'auto-pull-test.md');
-    // Pull first so we have a local file with notion_id in frontmatter.
-    await syncNotionFile(notion, {
+    fs.writeFileSync(filePath, `# Auto Pull Test\n\nContent.`, 'utf8');
+    const _created = await syncNotionFile(notion, {
       path: filePath,
-      page_id: createdPageIds[0],
+      page_id: parentId,
       direction: 'pull',
     });
-    // Backdate the local file so remote appears newer.
+
     const past = new Date(Date.now() - 60_000);
     fs.utimesSync(filePath, past, past);
     const result = await syncNotionFile(notion, { path: filePath, direction: 'auto' });
@@ -120,25 +128,26 @@ This was modified.`
 
   it('auto: pushes when local is newer than remote', async () => {
     const filePath = path.join(tmpDir, 'auto-push-test.md');
-    await syncNotionFile(notion, {
+    fs.writeFileSync(filePath, `# Auto Push Test\n\nContent.`, 'utf8');
+    const _created = await syncNotionFile(notion, {
       path: filePath,
-      page_id: createdPageIds[0],
+      page_id: parentId,
       direction: 'pull',
     });
-    // Touch the local file so it's definitely newer than the remote.
+
     const content = fs.readFileSync(filePath, 'utf8');
     fs.writeFileSync(filePath, `${content}\n<!-- touched -->`, 'utf8');
+
     const result = await syncNotionFile(notion, { path: filePath, direction: 'auto' });
     expect(result.direction).toBe('push');
     expect(result.reason).toContain('local');
-    createdPageIds.push(result.page_id);
   }, 25000);
 
   it('rejects push of a nonexistent local file', async () => {
     await expect(
       syncNotionFile(notion, {
         path: path.join(tmpDir, 'does-not-exist.md'),
-        parent_id: parentPageId,
+        parent_id: parentId,
         direction: 'push',
       })
     ).rejects.toThrow();
