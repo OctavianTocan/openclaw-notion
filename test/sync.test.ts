@@ -10,8 +10,8 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { deleteNotionPage, syncNotionFile } from '../src/index.js';
-import { createTestPage, createTestParent, deleteTestParent, makeClient } from './helpers.js';
+import { syncNotionFile } from '../src/index.js';
+import { createTestParent, deleteTestParent, makeClient } from './helpers.js';
 
 describe('notion_sync', () => {
   const notion = makeClient(undefined);
@@ -87,7 +87,7 @@ This was modified.`
     expect(updateResult.direction).toBe('push');
   }, 25000);
 
-  it('pull: downloads a Notion page to a local file', async ({ skip }) => {
+  it('pull: downloads a Notion page to a local file', async () => {
     // Create a page first via sync, then pull it
     const filePath1 = path.join(tmpDir, 'pull-source.md');
     fs.writeFileSync(filePath1, `# Pull Source\n\nContent to pull.`, 'utf8');
@@ -110,10 +110,10 @@ This was modified.`
     expect(fs.readFileSync(filePath2, 'utf8')).toContain(created.page_id);
   }, 20000);
 
-  it('auto: pulls when remote is newer than local', async ({ skip }) => {
+  it('auto: pulls when remote is newer than local', async () => {
     const filePath = path.join(tmpDir, 'auto-pull-test.md');
     fs.writeFileSync(filePath, `# Auto Pull Test\n\nContent.`, 'utf8');
-    const created = await syncNotionFile(notion, {
+    const _created = await syncNotionFile(notion, {
       path: filePath,
       page_id: parentId,
       direction: 'pull',
@@ -126,10 +126,10 @@ This was modified.`
     expect(result.reason).toContain('remote');
   }, 25000);
 
-  it('auto: pushes when local is newer than remote', async ({ skip }) => {
+  it('auto: pushes when local is newer than remote', async () => {
     const filePath = path.join(tmpDir, 'auto-push-test.md');
     fs.writeFileSync(filePath, `# Auto Push Test\n\nContent.`, 'utf8');
-    const created = await syncNotionFile(notion, {
+    const _created = await syncNotionFile(notion, {
       path: filePath,
       page_id: parentId,
       direction: 'pull',

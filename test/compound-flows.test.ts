@@ -8,12 +8,7 @@
 
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { deleteNotionPage, getMarkdownPagesApi } from '../src/index.js';
-import {
-  createTestPage,
-  createTestParent,
-  deleteTestParent,
-  makeClient,
-} from './helpers.js';
+import { createTestPage, createTestParent, deleteTestParent, makeClient } from './helpers.js';
 
 type MinimalPage = {
   id: string;
@@ -38,11 +33,7 @@ describe('Compound flows', () => {
 
   it('create → update title → append block → move → delete', async () => {
     // Create
-    const page = (await createTestPage(
-      notion,
-      parentId,
-      '[vitest] compound-test'
-    )) as MinimalPage;
+    const page = (await createTestPage(notion, parentId, '[vitest] compound-test')) as MinimalPage;
     expect(page.object).toBe('page');
 
     // Update title
@@ -50,9 +41,7 @@ describe('Compound flows', () => {
       (p) => (p as { type?: string }).type === 'title'
     );
     const propName = titleProp
-      ? Object.entries(page.properties ?? {}).find(
-          ([, v]) => v === titleProp
-        )?.[0] ?? 'title'
+      ? (Object.entries(page.properties ?? {}).find(([, v]) => v === titleProp)?.[0] ?? 'title')
       : 'title';
 
     const updated = (await notion.pages.update({
@@ -96,16 +85,8 @@ describe('Compound flows', () => {
   }, 40000);
 
   it('create → update markdown → retrieve as markdown → delete', async () => {
-    const root = await createTestPage(
-      notion,
-      parentId,
-      `[vitest] md-compound-root-${Date.now()}`
-    );
-    const page = (await createTestPage(
-      notion,
-      root.id,
-      '[vitest] md-compound'
-    )) as MinimalPage;
+    const root = await createTestPage(notion, parentId, `[vitest] md-compound-root-${Date.now()}`);
+    const page = (await createTestPage(notion, root.id, '[vitest] md-compound')) as MinimalPage;
 
     const api = getMarkdownPagesApi(notion);
     await api.updateMarkdown({
@@ -120,11 +101,7 @@ describe('Compound flows', () => {
   }, 25000);
 
   it('create → delete: deleted page cannot accept new blocks', async () => {
-    const page = (await createTestPage(
-      notion,
-      parentId,
-      '[vitest] delete-verify'
-    )) as MinimalPage;
+    const page = (await createTestPage(notion, parentId, '[vitest] delete-verify')) as MinimalPage;
     await deleteNotionPage(notion, { page_id: page.id });
 
     // After trashing, appending should fail

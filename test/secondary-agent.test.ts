@@ -80,9 +80,7 @@ describe(`Secondary agent (${SECONDARY_AGENT})`, () => {
         '[vitest] default-to-isolate'
       );
       // Secondary client must NOT be able to retrieve or delete this page
-      await expect(
-        secondaryNotion.pages.retrieve({ page_id: defaultPage.id })
-      ).rejects.toThrow();
+      await expect(secondaryNotion.pages.retrieve({ page_id: defaultPage.id })).rejects.toThrow();
     } finally {
       if (defaultParent) await deleteTestParent(defaultNotion, defaultParent);
     }

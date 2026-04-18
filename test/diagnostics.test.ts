@@ -8,14 +8,7 @@
  */
 
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import {
-  deleteNotionPage,
-  getNotionHelp,
-  getMarkdownPagesApi,
-  moveNotionPage,
-  publishNotionPage,
-  runNotionDoctor,
-} from '../src/index.js';
+import { deleteNotionPage, getNotionHelp, moveNotionPage, runNotionDoctor } from '../src/index.js';
 import {
   createTestPage,
   createTestParent,
@@ -116,11 +109,7 @@ describe('URL surfacing', () => {
   });
 
   it('notion_create returns url at top level', async () => {
-    const page = (await createTestPage(
-      notion,
-      parentId,
-      '[vitest] url-test'
-    )) as UrlPage;
+    const page = (await createTestPage(notion, parentId, '[vitest] url-test')) as UrlPage;
     testPageId = page.id;
     expect(page.url).toMatch(/^https:\/\/www\.notion\.so\//);
   }, 15000);
@@ -159,9 +148,7 @@ describe('Cross-agent workspace isolation (destructive ops)', () => {
       '[vitest] default-isolated-page'
     );
     // Secondary agent must NOT be able to delete it
-    await expect(
-      deleteNotionPage(secondaryNotion, { page_id: defaultPage.id })
-    ).rejects.toThrow();
+    await expect(deleteNotionPage(secondaryNotion, { page_id: defaultPage.id })).rejects.toThrow();
   });
 
   it('secondary agent cannot move pages from the default workspace', async () => {

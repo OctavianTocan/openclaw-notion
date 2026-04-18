@@ -10,10 +10,10 @@
  * workspace content.
  */
 
-import { Client } from '@notionhq/client';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
+import { Client } from '@notionhq/client';
 import { NOTION_VERSION } from '../src/constants.js';
 
 const NOTION_CONFIG_DIR = path.join(os.homedir(), '.config', 'notion');

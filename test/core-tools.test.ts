@@ -7,17 +7,8 @@
  */
 
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { deleteNotionPage, getMarkdownPagesApi } from '../src/index.js';
+import { getMarkdownPagesApi } from '../src/index.js';
 import { createTestPage, createTestParent, deleteTestParent, makeClient } from './helpers.js';
-
-type SearchResultPage = {
-  id: string;
-  object?: string;
-  url?: string;
-  properties?: {
-    title?: { title?: Array<{ plain_text?: string }> };
-  };
-};
 
 type BlockResult = {
   id?: string;
@@ -74,21 +65,13 @@ describe('Default agent — core tools', () => {
 
   describe('notion_read', () => {
     it('reads blocks from a known page', async () => {
-      const root = await createTestPage(
-        notion,
-        parentId,
-        `[vitest] read-fixture-${Date.now()}`
-      );
+      const root = await createTestPage(notion, parentId, `[vitest] read-fixture-${Date.now()}`);
       const response = await notion.blocks.children.list({ block_id: root.id });
       expect(Array.isArray(response.results)).toBe(true);
     });
 
     it('returns block objects with type and id', async () => {
-      const root = await createTestPage(
-        notion,
-        parentId,
-        `[vitest] read-fixture2-${Date.now()}`
-      );
+      const root = await createTestPage(notion, parentId, `[vitest] read-fixture2-${Date.now()}`);
       const response = await notion.blocks.children.list({ block_id: root.id });
       if (response.results.length > 0) {
         const block = response.results[0] as BlockResult;
@@ -107,11 +90,7 @@ describe('Default agent — core tools', () => {
 
   describe('notion_append', () => {
     it('appends a paragraph block to a page', async () => {
-      const root = await createTestPage(
-        notion,
-        parentId,
-        `[vitest] append-fixture-${Date.now()}`
-      );
+      const root = await createTestPage(notion, parentId, `[vitest] append-fixture-${Date.now()}`);
       const testText = `[vitest] append test at ${new Date().toISOString()}`;
       const response = await notion.blocks.children.append({
         block_id: root.id,
@@ -147,11 +126,7 @@ describe('Default agent — core tools', () => {
 
   describe('markdown and comments', () => {
     it('creates a page with markdown under a parent', async () => {
-      const root = await createTestPage(
-        notion,
-        parentId,
-        `[vitest] parent-fixture-${Date.now()}`
-      );
+      const root = await createTestPage(notion, parentId, `[vitest] parent-fixture-${Date.now()}`);
       const page = await createTestPage(
         notion,
         root.id,
@@ -169,11 +144,7 @@ console.log('hello');
     });
 
     it('retrieves the created page as markdown', async () => {
-      const root = await createTestPage(
-        notion,
-        parentId,
-        `[vitest] md-fixture-${Date.now()}`
-      );
+      const root = await createTestPage(notion, parentId, `[vitest] md-fixture-${Date.now()}`);
       const page = await createTestPage(
         notion,
         root.id,
@@ -188,17 +159,8 @@ console.log('hello');
     });
 
     it('updates page content via replace_content markdown', async () => {
-      const root = await createTestPage(
-        notion,
-        parentId,
-        `[vitest] update-fixture-${Date.now()}`
-      );
-      const page = await createTestPage(
-        notion,
-        root.id,
-        'Update Test',
-        'Original content'
-      );
+      const root = await createTestPage(notion, parentId, `[vitest] update-fixture-${Date.now()}`);
+      const page = await createTestPage(notion, root.id, 'Update Test', 'Original content');
       const updated = await getMarkdownPagesApi(notion).updateMarkdown({
         page_id: page.id,
         type: 'replace_content',
@@ -213,11 +175,7 @@ New content here.`,
     });
 
     it('updates page title and icon', async () => {
-      const root = await createTestPage(
-        notion,
-        parentId,
-        `[vitest] icon-fixture-${Date.now()}`
-      );
+      const root = await createTestPage(notion, parentId, `[vitest] icon-fixture-${Date.now()}`);
       const page = await createTestPage(notion, root.id, 'Icon Test');
       const updated = (await notion.pages.update({
         page_id: page.id,

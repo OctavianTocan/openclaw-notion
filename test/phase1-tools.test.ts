@@ -35,11 +35,7 @@ describe('notion_delete', () => {
   });
 
   it('creates a page then trashes it', async () => {
-    const page = (await createTestPage(
-      notion,
-      parentId,
-      '[vitest] trash-me'
-    )) as MinimalPage;
+    const page = (await createTestPage(notion, parentId, '[vitest] trash-me')) as MinimalPage;
     const trashedPage = (await deleteNotionPage(notion, { page_id: page.id })) as MinimalPage;
     expect(trashedPage.in_trash === true || trashedPage.archived === true).toBe(true);
   }, 15000);
@@ -69,11 +65,7 @@ describe('notion_move', () => {
     ).id;
 
     const movePageId = (
-      (await createTestPage(
-        notion,
-        parentId,
-        '[vitest] page-to-move'
-      )) as MinimalPage
+      (await createTestPage(notion, parentId, '[vitest] page-to-move')) as MinimalPage
     ).id;
 
     await moveNotionPage(notion, { page_id: movePageId, new_parent_id: secondParentId });
