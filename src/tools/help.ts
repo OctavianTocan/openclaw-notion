@@ -125,6 +125,24 @@ export const TOOL_DOCS: ToolDoc[] = [
     parameters: [],
     example: '{}',
   },
+  {
+    name: 'notion_logs_read',
+    description:
+      'Read audit log entries from the local notion-operations.db with optional filters.',
+    parameters: [
+      'limit?: number (default 20, max 100)',
+      'tool_name?: string',
+      'operation?: string',
+      'status?: "success" | "error"',
+      'page_id?: string',
+      'database_id?: string',
+      'since?: ISO timestamp',
+      'session_id?: string',
+      'agent_id?: string',
+      'include_raw?: boolean (default false)',
+    ],
+    example: '{"operation":"create","status":"error","limit":10}',
+  },
 ];
 
 /**

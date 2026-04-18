@@ -585,7 +585,9 @@ export default definePluginEntry({
           Type.String({ description: 'Filter by operation type (search, read, create, etc.).' })
         ),
         status: Type.Optional(
-          Type.String({ description: 'Filter by status: "success" or "error".' })
+          Type.Union([Type.Literal('success'), Type.Literal('error')], {
+            description: 'Filter by status: "success" or "error".',
+          })
         ),
         page_id: Type.Optional(Type.String({ description: 'Filter by target page ID.' })),
         database_id: Type.Optional(Type.String({ description: 'Filter by target database ID.' })),
@@ -601,13 +603,9 @@ export default definePluginEntry({
         ),
       }),
       async execute(_id, params) {
-        // Cap limit to prevent accidentally dumping the entire audit table.
-        const limit = Math.min(params.limit ?? 20, 100);
         return asJsonContent(
           readNotionLogs({
             ...params,
-            limit,
-            status: params.status as 'success' | 'error' | undefined,
           })
         );
       },

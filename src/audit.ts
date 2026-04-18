@@ -260,7 +260,57 @@ function rawResponseHeaders(res: object): Record<string, string> {
   return (res as { headers?: Record<string, string> }).headers ?? {};
 }
 
+/* ─── Safe JSON parsing ─────────────────────────────────────────────────── */
+
+/**
+ * Parse a JSON string without throwing on malformed data.
+ *
+ * Returns `null` when the value is nullish, non-string, or unparseable,
+ * so a single corrupt row can't break an entire audit log read.
+ */
+function safeJsonParse(value: unknown): unknown | null {
+  if (value == null) return null;
+  if (typeof value !== 'string') return null;
+  try {
+    return JSON.parse(value);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Redact sensitive fields (Authorization headers, tokens) from a parsed
+ * request body object so raw log reads don't leak credentials.
+ */
+function redactSensitiveFields(obj: unknown): unknown {
+  if (obj == null || typeof obj !== 'object') return obj;
+  const record = obj as Record<string, unknown>;
+  const result: Record<string, unknown> = {};
+  for (const [key, val] of Object.entries(record)) {
+    if (key.toLowerCase().includes('authorization') || key.toLowerCase().includes('token')) {
+      result[key] = '[REDACTED]';
+    } else if (typeof val === 'object' && val !== null && !Array.isArray(val)) {
+      result[key] = redactSensitiveFields(val);
+    } else {
+      result[key] = val;
+    }
+  }
+  return result;
+}
+
 /* ─── Query helpers ──────────────────────────────────────────────────────── */
+
+/**
+ * Clamp a limit value to a safe non-negative integer in the range [0, 100].
+ *
+ * Rejects NaN, fractional, and negative values that could cause unexpected
+ * SQLite behaviour (e.g. `LIMIT -1` disables the cap entirely).
+ */
+function clampLimit(raw: number | undefined, fallback = 20): number {
+  const n = raw ?? fallback;
+  if (!Number.isFinite(n) || !Number.isInteger(n)) return fallback;
+  return Math.max(0, Math.min(n, 100));
+}
 
 /**
  * Extended audit log reader supporting all filterable columns.
@@ -320,7 +370,8 @@ export function readAuditLogs(opts: {
   }
 
   const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
-  const limit = opts.limit ?? 20;
+  const limit = clampLimit(opts.limit);
+  params.limit = limit;
 
   // When include_raw is true, JOIN the raw request/response tables so the
   // caller can inspect full HTTP payloads for debugging.
@@ -339,20 +390,16 @@ export function readAuditLogs(opts: {
         LEFT JOIN notion_raw_responses res ON o.response_id = res.id
         ${where}
         ORDER BY o.timestamp DESC
-        LIMIT ${limit}`;
+        LIMIT @limit`;
     const rows = db.prepare(sql).all(params) as Record<string, unknown>[];
     return rows.map((row) => ({
       ...row,
-      state_before: row.state_before ? JSON.parse(row.state_before as string) : null,
-      state_after: row.state_after ? JSON.parse(row.state_after as string) : null,
-      raw_request_body: row.raw_request_body ? JSON.parse(row.raw_request_body as string) : null,
-      raw_request_headers: row.raw_request_headers
-        ? JSON.parse(row.raw_request_headers as string)
-        : null,
-      raw_response_body: row.raw_response_body ? JSON.parse(row.raw_response_body as string) : null,
-      raw_response_headers: row.raw_response_headers
-        ? JSON.parse(row.raw_response_headers as string)
-        : null,
+      state_before: safeJsonParse(row.state_before),
+      state_after: safeJsonParse(row.state_after),
+      raw_request_body: redactSensitiveFields(safeJsonParse(row.raw_request_body)),
+      raw_request_headers: safeJsonParse(row.raw_request_headers),
+      raw_response_body: safeJsonParse(row.raw_response_body),
+      raw_response_headers: safeJsonParse(row.raw_response_headers),
     }));
   }
 
@@ -366,7 +413,7 @@ export function readAuditLogs(opts: {
       FROM notion_operations o
       ${where}
       ORDER BY o.timestamp DESC
-      LIMIT ${limit}`;
+      LIMIT @limit`;
   return db.prepare(sql).all(params) as Record<string, unknown>[];
 }
 
@@ -410,8 +457,8 @@ export function getOperations(opts: {
 
   return rows.map((row) => ({
     ...row,
-    state_before: row.state_before ? JSON.parse(row.state_before as string) : null,
-    state_after: row.state_after ? JSON.parse(row.state_after as string) : null,
+    state_before: safeJsonParse(row.state_before),
+    state_after: safeJsonParse(row.state_after),
   }));
 }
 
