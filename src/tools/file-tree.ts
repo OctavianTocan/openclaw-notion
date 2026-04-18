@@ -9,7 +9,7 @@
 import type { Client } from '@notionhq/client';
 import { DEFAULT_PAGE_SIZE } from '../constants.js';
 import { extractPageTitle, retrieveDatabaseMetadata, retrievePageMetadata } from '../helpers.js';
-import type { AnyBlock, FileTreeParams, TreeNode } from '../types.js';
+import type { AnyBlock, AnyPage, FileTreeParams, TreeNode } from '../types.js';
 
 /**
  * Recursively build a tree node for a single Notion page.
@@ -69,6 +69,25 @@ async function buildFileTreeNode(
 
     startCursor = response.next_cursor ?? undefined;
   } while (startCursor);
+
+  // Supplementary discovery: find child pages created via pages.create() that
+  // may not appear as child_page blocks in blocks.children.list(). A single
+  // search call (capped at 100) catches the common case without paginating
+  // through the entire workspace, which would timeout on large workspaces.
+  const seenIds = new Set(node.children.map((c) => c.id));
+  const searchResponse = await notion.search({
+    query: '',
+    filter: { property: 'object', value: 'page' },
+    page_size: 100,
+  });
+
+  for (const result of searchResponse.results) {
+    const resultPage = result as AnyPage;
+    if (resultPage.parent?.page_id === pageId && !seenIds.has(resultPage.id)) {
+      seenIds.add(resultPage.id);
+      node.children.push(await buildFileTreeNode(notion, resultPage.id, maxDepth, depth + 1));
+    }
+  }
 
   return node;
 }
