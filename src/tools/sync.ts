@@ -271,7 +271,7 @@ async function pushLocalFile(
  * @param error - Caught error from a Notion SDK call.
  * @returns A descriptive error string.
  */
-function extractNotionErrorDetail(error: unknown): string {
+export function extractNotionErrorDetail(error: unknown): string {
   if (!isRecord(error)) return String(error);
 
   // The SDK typically puts the API message on error.message and the full body
@@ -308,7 +308,7 @@ function extractNotionErrorDetail(error: unknown): string {
  * @param markdown - Raw markdown string from Notion.
  * @returns Markdown with underscore italics replaced by asterisk italics.
  */
-function normalizeItalics(markdown: string): string {
+export function normalizeItalics(markdown: string): string {
   // Split on code fences, inline code, and markdown link targets so we only
   // transform prose regions. Link targets are excluded because URLs often
   // contain underscores (e.g. https://example.com/_docs_/v1).
@@ -393,7 +393,7 @@ async function enumerateChildBlocks(
  * @param value - Raw attribute string (typically a URL).
  * @returns Escaped string safe for use inside double-quoted attributes.
  */
-function escapeTagAttribute(value: string): string {
+export function escapeTagAttribute(value: string): string {
   return value
     .replace(/&/g, '&amp;')
     .replace(/</g, '&lt;')
@@ -407,7 +407,7 @@ function escapeTagAttribute(value: string): string {
  * @param value - Raw text (typically a page or database title).
  * @returns Escaped string safe for use as element text content.
  */
-function escapeTagText(value: string): string {
+export function escapeTagText(value: string): string {
   return value.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
 
@@ -427,7 +427,7 @@ function escapeTagText(value: string): string {
  * @param children - Child blocks discovered via blocks.children.list.
  * @returns Markdown with any missing child reference tags appended.
  */
-function appendMissingChildTags(
+export function appendMissingChildTags(
   markdown: string,
   children: Array<{
     id: string;

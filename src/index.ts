@@ -34,7 +34,14 @@ export { getNotionHelp } from './tools/help.js';
 export { readNotionLogs } from './tools/logs.js';
 export { deleteNotionPage, moveNotionPage, publishNotionPage } from './tools/pages.js';
 export { queryNotionDatabase } from './tools/query.js';
-export { syncNotionFile } from './tools/sync.js';
+export {
+  appendMissingChildTags,
+  escapeTagAttribute,
+  escapeTagText,
+  extractNotionErrorDetail,
+  normalizeItalics,
+  syncNotionFile,
+} from './tools/sync.js';
 
 /**
  * Build a single paragraph block for the Notion append endpoint.
