@@ -27,6 +27,12 @@ import type { AnyBlock, AnyPage, LocalFileState, SyncParams } from '../types.js'
 /**
  * Read and parse a local markdown file, extracting frontmatter and stats.
  *
+ * When the YAML frontmatter contains values that trip the parser (unquoted
+ * colons, embedded quotes, etc.) this falls back to stripping the frontmatter
+ * block and treating the rest as the markdown body with empty metadata. The
+ * sync flow can still proceed — it just won't extract `notion_id` or `title`
+ * from the broken frontmatter.
+ *
  * @param filePath - Relative or absolute path to the file.
  * @returns Parsed local state including frontmatter data, body content,
  *   and filesystem stats. Returns `exists: false` when the file is missing.
@@ -37,14 +43,21 @@ export async function readLocalFileState(filePath: string): Promise<LocalFileSta
   try {
     const stat = await fsp.stat(absolutePath);
     const raw = await fsp.readFile(absolutePath, 'utf8');
-    const parsed = matter(raw);
-    return {
-      absolutePath,
-      exists: true,
-      data: isRecord(parsed.data) ? parsed.data : {},
-      content: parsed.content,
-      stat,
-    };
+    let data: Record<string, unknown> = {};
+    let content: string;
+
+    try {
+      const parsed = matter(raw);
+      data = isRecord(parsed.data) ? parsed.data : {};
+      content = parsed.content;
+    } catch {
+      // YAML frontmatter is malformed (colons, quotes, or other special chars
+      // in values). Strip the frontmatter fences and treat the body as-is so
+      // the sync can still push/pull the markdown content.
+      content = stripFrontmatter(raw);
+    }
+
+    return { absolutePath, exists: true, data, content, stat };
   } catch (error) {
     if (isRecord(error) && error.code === 'ENOENT') {
       return {
@@ -57,6 +70,24 @@ export async function readLocalFileState(filePath: string): Promise<LocalFileSta
     }
     throw error;
   }
+}
+
+/**
+ * Strip YAML frontmatter fences from raw file content.
+ *
+ * Removes the leading `---` … `---` block (if present) and returns everything
+ * after the closing fence. Used as a fallback when the YAML parser rejects the
+ * frontmatter content.
+ *
+ * @param raw - Full file content including frontmatter delimiters.
+ * @returns The file content without the frontmatter block.
+ */
+export function stripFrontmatter(raw: string): string {
+  const match = raw.match(/^---\r?\n([\s\S]*?\r?\n)?---\r?\n?/);
+  if (match) {
+    return raw.slice(match[0].length);
+  }
+  return raw;
 }
 
 /**

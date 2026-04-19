@@ -13,6 +13,7 @@ import {
   escapeTagText,
   extractNotionErrorDetail,
   normalizeItalics,
+  stripFrontmatter,
 } from '../src/index.js';
 
 /* ------------------------------------------------------------------ */
@@ -269,5 +270,48 @@ describe('extractNotionErrorDetail', () => {
   it('handles error with only code, no message', () => {
     const error = { code: 'object_not_found' };
     expect(extractNotionErrorDetail(error)).toContain('[object_not_found]');
+  });
+});
+
+/* ------------------------------------------------------------------ */
+/*  stripFrontmatter                                                    */
+/* ------------------------------------------------------------------ */
+
+describe('stripFrontmatter', () => {
+  it('strips a valid frontmatter block', () => {
+    const input = '---\ntitle: Hello\n---\n# Body';
+    expect(stripFrontmatter(input)).toBe('# Body');
+  });
+
+  it('strips frontmatter with complex YAML that would break the parser', () => {
+    const input =
+      '---\nname: tribunal\ndescription: Triggers: "tribunal", "panel critique".\n---\n# Content';
+    expect(stripFrontmatter(input)).toBe('# Content');
+  });
+
+  it('returns content unchanged when no frontmatter is present', () => {
+    const input = '# Just markdown\n\nNo frontmatter here.';
+    expect(stripFrontmatter(input)).toBe(input);
+  });
+
+  it('handles empty frontmatter block', () => {
+    const input = '---\n---\n# Body';
+    expect(stripFrontmatter(input)).toBe('# Body');
+  });
+
+  it('handles Windows-style line endings', () => {
+    const input = '---\r\ntitle: Hello\r\n---\r\n# Body';
+    expect(stripFrontmatter(input)).toBe('# Body');
+  });
+
+  it('only strips the first frontmatter block', () => {
+    const input = '---\ntitle: Hello\n---\nMiddle\n---\nmore: yaml\n---\nEnd';
+    const result = stripFrontmatter(input);
+    expect(result).toBe('Middle\n---\nmore: yaml\n---\nEnd');
+  });
+
+  it('handles frontmatter with no trailing content', () => {
+    const input = '---\ntitle: Hello\n---\n';
+    expect(stripFrontmatter(input)).toBe('');
   });
 });

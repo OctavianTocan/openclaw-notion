@@ -40,6 +40,7 @@ export {
   escapeTagText,
   extractNotionErrorDetail,
   normalizeItalics,
+  stripFrontmatter,
   syncNotionFile,
 } from './tools/sync.js';
 
