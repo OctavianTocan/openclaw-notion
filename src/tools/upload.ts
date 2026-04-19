@@ -93,7 +93,18 @@ export async function uploadNotionFile(
   }
 
   const filename = params.display_name ?? path.basename(absolutePath);
-  const contentType = params.content_type ?? inferContentType(absolutePath);
+  // Infer MIME type from display_name if provided (it may have a different
+  // extension than the local file), falling back to the actual file path.
+  const contentType =
+    params.content_type?.trim() || inferContentType(params.display_name ?? absolutePath);
+
+  // Guard against SDK versions that predate the fileUploads namespace.
+  if (!notion.fileUploads) {
+    throw new Error(
+      'Notion client does not support file uploads. ' +
+        'Upgrade @notionhq/client to v5.12.0+ and set notionVersion to 2026-03-11.'
+    );
+  }
 
   // Step 1: Create a file upload slot in Notion.
   // The SDK types haven't caught up with fileUploads yet, so cast through
@@ -110,11 +121,17 @@ export async function uploadNotionFile(
   // Step 2: Stream the file binary to Notion.
   // createReadStream avoids loading the entire file into memory.
   const readStream = createReadStream(absolutePath);
-  await fileUploadsApi.send({
-    file_upload_id: fileUploadId,
-    file: readStream,
-    filename,
-  });
+  try {
+    await fileUploadsApi.send({
+      file_upload_id: fileUploadId,
+      file: readStream,
+      filename,
+    });
+  } finally {
+    // Ensure the stream is closed even if send() rejects, preventing
+    // file descriptor leaks on large or failing uploads.
+    readStream.destroy();
+  }
 
   // Step 3: Attach the uploaded file to the target page as a file block.
   // The `uploaded_file` block variant isn't in the SDK types yet, so we
