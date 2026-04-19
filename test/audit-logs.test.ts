@@ -10,6 +10,8 @@
  * @module
  */
 
+import * as fs from 'node:fs';
+import * as path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import {
   clampLimit,
@@ -22,14 +24,17 @@ import {
 import { readNotionLogs } from '../src/tools/logs.js';
 
 /**
- * Check whether the better-sqlite3 native addon is available.
- * Integration tests that hit the database are skipped when it isn't.
+ * Check whether the better-sqlite3 native addon binary exists on disk.
+ * The native binary only compiles when build tools are available (make, g++).
+ * Integration tests that hit the database are skipped when it isn't built.
  */
 function hasSqliteBindings(): boolean {
   try {
-    // eslint-disable-next-line @typescript-eslint/no-require-imports
-    require('better-sqlite3');
-    return true;
+    // Resolve the better-sqlite3 package directory, then check for the compiled binary.
+    const bsqlPath = require.resolve('better-sqlite3');
+    const pkgDir = path.dirname(path.dirname(bsqlPath));
+    const buildDir = path.join(pkgDir, 'build', 'Release');
+    return fs.existsSync(path.join(buildDir, 'better_sqlite3.node'));
   } catch {
     return false;
   }
