@@ -1,7 +1,7 @@
 /**
  * openclaw-notion — OpenClaw plugin entry point.
  *
- * Registers 18 Notion tools with the OpenClaw plugin SDK. Each tool
+ * Registers 19 Notion tools with the OpenClaw plugin SDK. Each tool
  * resolves an agent-scoped Notion client via {@link getClient}, ensuring
  * workspace isolation between agents.
  *
@@ -23,7 +23,8 @@ import { readNotionLogs } from './tools/logs.js';
 import { deleteNotionPage, moveNotionPage, publishNotionPage } from './tools/pages.js';
 import { queryNotionDatabase } from './tools/query.js';
 import { syncNotionFile } from './tools/sync.js';
-import type { AnyPage, SyncParams } from './types.js';
+import { uploadNotionFile } from './tools/upload.js';
+import type { AnyPage, SyncParams, UploadParams } from './types.js';
 
 // ── Re-exports for test access ──────────────────────────────────────────
 export { getClient, getMarkdownPagesApi } from './client.js';
@@ -42,6 +43,7 @@ export {
   normalizeItalics,
   syncNotionFile,
 } from './tools/sync.js';
+export { uploadNotionFile } from './tools/upload.js';
 
 /**
  * Build a single paragraph block for the Notion append endpoint.
@@ -533,6 +535,39 @@ export default definePluginEntry({
           fn: async () => {
             return asJsonContent(
               await syncNotionFile(getClient(ctx.agentId), params as SyncParams)
+            );
+          },
+        });
+      },
+    }));
+
+    // --- notion_upload_file ---
+    api.registerTool((ctx) => ({
+      name: 'notion_upload_file',
+      label: 'Notion Upload File',
+      description: 'Upload a local file to Notion and attach it as a file block on a page.',
+      parameters: Type.Object({
+        file_path: Type.String({ description: 'Local filesystem path to the file to upload.' }),
+        page_id: Type.String({ description: 'The UUID of the target Notion page.' }),
+        display_name: Type.Optional(
+          Type.String({ description: 'Optional display name for the file in Notion.' })
+        ),
+        content_type: Type.Optional(
+          Type.String({
+            description: 'Optional MIME type override. Auto-detected from extension when omitted.',
+          })
+        ),
+      }),
+      async execute(_id, params) {
+        return withAudit({
+          operation: 'upload_file',
+          toolName: 'notion_upload_file',
+          agentId: ctx.agentId,
+          targetPageId: params.page_id,
+          localPath: params.file_path,
+          fn: async () => {
+            return asJsonContent(
+              await uploadNotionFile(getClient(ctx.agentId), params as UploadParams)
             );
           },
         });
