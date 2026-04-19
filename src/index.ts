@@ -38,6 +38,7 @@ export {
   appendMissingChildTags,
   escapeTagAttribute,
   escapeTagText,
+  extractFrontmatterIds,
   extractNotionErrorDetail,
   normalizeItalics,
   stripFrontmatter,

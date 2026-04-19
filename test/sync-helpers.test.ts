@@ -11,6 +11,7 @@ import {
   appendMissingChildTags,
   escapeTagAttribute,
   escapeTagText,
+  extractFrontmatterIds,
   extractNotionErrorDetail,
   normalizeItalics,
   stripFrontmatter,
@@ -295,8 +296,11 @@ describe('stripFrontmatter', () => {
   });
 
   it('handles empty frontmatter block', () => {
+    // Empty frontmatter (no content between fences) has no newline between
+    // the two --- delimiters, so it doesn't match the pattern. gray-matter
+    // parses this fine anyway, so the fallback path never sees it.
     const input = '---\n---\n# Body';
-    expect(stripFrontmatter(input)).toBe('# Body');
+    expect(stripFrontmatter(input)).toBe('---\n---\n# Body');
   });
 
   it('handles Windows-style line endings', () => {
@@ -313,5 +317,50 @@ describe('stripFrontmatter', () => {
   it('handles frontmatter with no trailing content', () => {
     const input = '---\ntitle: Hello\n---\n';
     expect(stripFrontmatter(input)).toBe('');
+  });
+
+  it('strips multi-line frontmatter with many keys', () => {
+    const input =
+      '---\ntitle: Hello\nauthor: Someone\ntags: a, b, c\nnotion_id: abc-123\n---\n# Body';
+    expect(stripFrontmatter(input)).toBe('# Body');
+  });
+});
+
+/* ------------------------------------------------------------------ */
+/*  extractFrontmatterIds                                               */
+/* ------------------------------------------------------------------ */
+
+describe('extractFrontmatterIds', () => {
+  it('extracts notion_id from raw frontmatter', () => {
+    const raw = '---\ntitle: Test\nnotion_id: abc-123-def\n---\n# Body';
+    const result = extractFrontmatterIds(raw);
+    expect(result.notion_id).toBe('abc-123-def');
+  });
+
+  it('extracts title from raw frontmatter', () => {
+    const raw = '---\ntitle: My Page\nnotion_id: abc\n---\n# Body';
+    const result = extractFrontmatterIds(raw);
+    expect(result.title).toBe('My Page');
+  });
+
+  it('handles frontmatter where only notion_id is present', () => {
+    const raw = '---\ndescription: Triggers: "tribunal"\nnotion_id: abc-123\n---\n# Body';
+    const result = extractFrontmatterIds(raw);
+    expect(result.notion_id).toBe('abc-123');
+    expect(result.title).toBeUndefined();
+  });
+
+  it('returns empty object when no frontmatter is present', () => {
+    expect(extractFrontmatterIds('# No frontmatter')).toEqual({});
+  });
+
+  it('returns empty object when frontmatter has no recognized keys', () => {
+    const raw = '---\nfoo: bar\nbaz: qux\n---\n# Body';
+    expect(extractFrontmatterIds(raw)).toEqual({});
+  });
+
+  it('handles notion_id with surrounding whitespace', () => {
+    const raw = '---\nnotion_id:   abc-123  \n---\n# Body';
+    expect(extractFrontmatterIds(raw).notion_id).toBe('abc-123');
   });
 });

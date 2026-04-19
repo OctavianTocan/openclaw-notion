@@ -50,11 +50,16 @@ export async function readLocalFileState(filePath: string): Promise<LocalFileSta
       const parsed = matter(raw);
       data = isRecord(parsed.data) ? parsed.data : {};
       content = parsed.content;
-    } catch {
-      // YAML frontmatter is malformed (colons, quotes, or other special chars
-      // in values). Strip the frontmatter fences and treat the body as-is so
-      // the sync can still push/pull the markdown content.
+    } catch (parseError) {
+      // Only fall back for YAML parse errors. Re-throw anything else
+      // (e.g. out-of-memory, encoding issues) so it surfaces normally.
+      if (!isYamlParseError(parseError)) throw parseError;
+
       content = stripFrontmatter(raw);
+      // Best-effort: pull notion_id from the raw frontmatter so the sync
+      // can still link to the existing Notion page instead of creating a
+      // duplicate.
+      data = extractFrontmatterIds(raw);
     }
 
     return { absolutePath, exists: true, data, content, stat };
@@ -73,6 +78,50 @@ export async function readLocalFileState(filePath: string): Promise<LocalFileSta
 }
 
 /**
+ * Check whether an error looks like a YAML parse failure from gray-matter/js-yaml.
+ *
+ * Narrows the catch so only known parse errors trigger the fallback path.
+ * Unexpected errors (OOM, encoding, etc.) still propagate.
+ */
+function isYamlParseError(error: unknown): boolean {
+  if (error instanceof Error) {
+    // js-yaml throws YAMLException which has a 'mark' property.
+    if ('mark' in error) return true;
+    // Fallback: check the message for common YAML parse error patterns.
+    const msg = error.message.toLowerCase();
+    return msg.includes('yaml') || msg.includes('mapping') || msg.includes('tag');
+  }
+  return false;
+}
+
+/**
+ * Best-effort extraction of `notion_id` (and optionally `title`) from raw
+ * frontmatter text when the full YAML parser has failed.
+ *
+ * Uses simple line-by-line regex matching, which works for flat key-value
+ * pairs even when the broader YAML structure is ambiguous.
+ *
+ * @param raw - Full file content including frontmatter delimiters.
+ * @returns A record with any extracted keys, or empty if none found.
+ */
+export function extractFrontmatterIds(raw: string): Record<string, unknown> {
+  const fmMatch = raw.match(/^---\r?\n([\s\S]*?)\r?\n---/);
+  if (!fmMatch) return {};
+
+  const block = fmMatch[1];
+  const result: Record<string, unknown> = {};
+
+  // Match simple key: value lines for the fields the sync flow depends on.
+  const notionIdMatch = block.match(/^notion_id:\s*(.+)$/m);
+  if (notionIdMatch) result.notion_id = notionIdMatch[1].trim();
+
+  const titleMatch = block.match(/^title:\s*(.+)$/m);
+  if (titleMatch) result.title = titleMatch[1].trim();
+
+  return result;
+}
+
+/**
  * Strip YAML frontmatter fences from raw file content.
  *
  * Removes the leading `---` … `---` block (if present) and returns everything
@@ -83,7 +132,7 @@ export async function readLocalFileState(filePath: string): Promise<LocalFileSta
  * @returns The file content without the frontmatter block.
  */
 export function stripFrontmatter(raw: string): string {
-  const match = raw.match(/^---\r?\n([\s\S]*?\r?\n)?---\r?\n?/);
+  const match = raw.match(/^---\r?\n[\s\S]*?\n---\r?\n?/);
   if (match) {
     return raw.slice(match[0].length);
   }
