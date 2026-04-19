@@ -121,11 +121,26 @@ export type LocalFileState = {
  */
 export type MarkdownPageApi = {
   retrieveMarkdown: (args: { page_id: string }) => Promise<LooseRecord>;
-  updateMarkdown: (args: {
-    page_id: string;
-    type: 'replace_content';
-    replace_content: { new_str: string };
-  }) => Promise<LooseRecord>;
+  updateMarkdown: (
+    args:
+      | {
+          page_id: string;
+          type: 'replace_content';
+          replace_content: { new_str: string; allow_deleting_content?: boolean };
+        }
+      | {
+          page_id: string;
+          type: 'update_content';
+          update_content: {
+            content_updates: Array<{
+              old_str: string;
+              new_str: string;
+              replace_all_matches?: boolean;
+            }>;
+            allow_deleting_content?: boolean;
+          };
+        }
+  ) => Promise<LooseRecord>;
 };
 
 /** Shape returned by both `databases.query` and `dataSources.query`. */
