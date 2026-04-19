@@ -15,7 +15,7 @@ import { logOperation, setAuditContext } from './audit.js';
 import { getClient, getMarkdownPagesApi } from './client.js';
 import { DEFAULT_PAGE_SIZE } from './constants.js';
 import { asJsonContent, asTextContent, wrapPageResponse } from './format.js';
-import { findTitlePropertyName } from './helpers.js';
+import { findTitlePropertyName, isRecord } from './helpers.js';
 import { runNotionDoctor } from './tools/doctor.js';
 import { getNotionFileTree } from './tools/file-tree.js';
 import { getNotionHelp } from './tools/help.js';
@@ -392,36 +392,55 @@ export default definePluginEntry({
             }
 
             // Inline comments live on individual child blocks, not the page
-            // itself. Walk all block children and collect their comments.
+            // itself. Recursively walk the block tree to catch comments on
+            // nested blocks (inside toggles, columns, etc.), not just
+            // first-level children.
             const allComments = [...pageComments];
             const seenIds = new Set(pageComments.map((c: { id: string }) => c.id));
 
-            let startCursor: string | undefined;
-            do {
-              const blocks = await notion.blocks.children.list({
-                block_id: params.page_id,
-                start_cursor: startCursor,
-                page_size: DEFAULT_PAGE_SIZE,
-              });
+            const collectBlockComments = async (parentId: string, depth: number) => {
+              // Cap recursion to avoid runaway traversal on deeply nested pages.
+              if (depth > 5) return;
 
-              for (const block of blocks.results) {
-                const b = block as { id: string };
-                try {
-                  const blockComments = (await notion.comments.list({ block_id: b.id })).results;
-                  for (const comment of blockComments) {
-                    const c = comment as { id: string };
-                    if (!seenIds.has(c.id)) {
-                      seenIds.add(c.id);
-                      allComments.push(comment);
+              let startCursor: string | undefined;
+              do {
+                const blocks = await notion.blocks.children.list({
+                  block_id: parentId,
+                  start_cursor: startCursor,
+                  page_size: DEFAULT_PAGE_SIZE,
+                });
+
+                for (const block of blocks.results) {
+                  const b = block as { id: string; has_children?: boolean };
+                  try {
+                    const blockComments = (await notion.comments.list({ block_id: b.id })).results;
+                    for (const comment of blockComments) {
+                      const c = comment as { id: string };
+                      if (!seenIds.has(c.id)) {
+                        seenIds.add(c.id);
+                        allComments.push(comment);
+                      }
                     }
+                  } catch (error) {
+                    // Only swallow "not supported" errors. Re-surface network,
+                    // auth, and rate-limit failures so partial results are visible.
+                    if (isRecord(error) && typeof error.code === 'string') {
+                      const code = error.code;
+                      if (code === 'validation_error' || code === 'object_not_found') continue;
+                    }
+                    throw error;
                   }
-                } catch {
-                  // Some block types don't support comments — skip silently.
+                  // Recurse into blocks that have children (toggles, columns, etc.).
+                  if (b.has_children) {
+                    await collectBlockComments(b.id, depth + 1);
+                  }
                 }
-              }
 
-              startCursor = blocks.next_cursor ?? undefined;
-            } while (startCursor);
+                startCursor = blocks.next_cursor ?? undefined;
+              } while (startCursor);
+            };
+
+            await collectBlockComments(params.page_id, 0);
 
             return asJsonContent(allComments);
           },
