@@ -362,11 +362,18 @@ export default definePluginEntry({
     api.registerTool((ctx) => ({
       name: 'notion_comment_list',
       label: 'Notion Comment List',
-      description: 'List comments attached to a Notion page.',
+      description:
+        'List comments on a Notion page. Set include_all_blocks to true to also retrieve inline comments on child blocks (paragraphs, headings, etc.), not just page-level comments.',
       parameters: Type.Object({
         page_id: Type.String({
           description: 'The UUID of the Notion page whose comments to list.',
         }),
+        include_all_blocks: Type.Optional(
+          Type.Boolean({
+            description:
+              'When true, also fetches inline comments from every child block on the page. Defaults to false (page-level comments only).',
+          })
+        ),
       }),
       async execute(_id, params) {
         return withAudit({
@@ -375,9 +382,48 @@ export default definePluginEntry({
           agentId: ctx.agentId,
           targetPageId: params.page_id,
           fn: async () => {
-            return asJsonContent(
-              (await getClient(ctx.agentId).comments.list({ block_id: params.page_id })).results
-            );
+            const notion = getClient(ctx.agentId);
+
+            // Page-level comments (always fetched).
+            const pageComments = (await notion.comments.list({ block_id: params.page_id })).results;
+
+            if (!params.include_all_blocks) {
+              return asJsonContent(pageComments);
+            }
+
+            // Inline comments live on individual child blocks, not the page
+            // itself. Walk all block children and collect their comments.
+            const allComments = [...pageComments];
+            const seenIds = new Set(pageComments.map((c: { id: string }) => c.id));
+
+            let startCursor: string | undefined;
+            do {
+              const blocks = await notion.blocks.children.list({
+                block_id: params.page_id,
+                start_cursor: startCursor,
+                page_size: DEFAULT_PAGE_SIZE,
+              });
+
+              for (const block of blocks.results) {
+                const b = block as { id: string };
+                try {
+                  const blockComments = (await notion.comments.list({ block_id: b.id })).results;
+                  for (const comment of blockComments) {
+                    const c = comment as { id: string };
+                    if (!seenIds.has(c.id)) {
+                      seenIds.add(c.id);
+                      allComments.push(comment);
+                    }
+                  }
+                } catch {
+                  // Some block types don't support comments — skip silently.
+                }
+              }
+
+              startCursor = blocks.next_cursor ?? undefined;
+            } while (startCursor);
+
+            return asJsonContent(allComments);
           },
         });
       },
