@@ -164,4 +164,80 @@ Just content.`,
     );
     await expect(syncNotionFile(notion, { path: filePath, direction: 'pull' })).rejects.toThrow();
   });
+
+  it('pull: includes <page> reference tags for child pages', async () => {
+    // Create a parent page with a child page underneath it.
+    const parentFile = path.join(tmpDir, 'parent-with-child.md');
+    fs.writeFileSync(parentFile, `# Parent\n\nSome content.`, 'utf8');
+    const parent = await syncNotionFile(notion, {
+      path: parentFile,
+      parent_id: parentId,
+      direction: 'push',
+    });
+
+    // Create a child page under the parent.
+    const childPage = (await notion.pages.create({
+      parent: { page_id: parent.page_id },
+      properties: {
+        title: { title: [{ type: 'text', text: { content: 'Child Page' } }] },
+      },
+      markdown: '# Child\n\nChild content.',
+    })) as { id: string };
+
+    // Pull the parent page — it should include a <page> tag for the child.
+    const pullFile = path.join(tmpDir, 'parent-pulled.md');
+    const result = await syncNotionFile(notion, {
+      path: pullFile,
+      page_id: parent.page_id,
+      direction: 'pull',
+    });
+
+    expect(result.direction).toBe('pull');
+    const content = fs.readFileSync(pullFile, 'utf8');
+    const childIdNoDashes = childPage.id.replace(/-/g, '');
+    expect(content).toMatch(new RegExp(`<page[^>]*${childIdNoDashes}`));
+  }, 40000);
+
+  it('pull: normalises underscore italics to asterisks', async () => {
+    // Create a page with underscore-style italics.
+    const page = (await notion.pages.create({
+      parent: { page_id: parentId },
+      properties: {
+        title: { title: [{ type: 'text', text: { content: 'Italic Test' } }] },
+      },
+      markdown: 'Some _italic text_ here.',
+    })) as { id: string };
+
+    const pullFile = path.join(tmpDir, 'italic-test.md');
+    await syncNotionFile(notion, {
+      path: pullFile,
+      page_id: page.id,
+      direction: 'pull',
+    });
+
+    const content = fs.readFileSync(pullFile, 'utf8');
+    // Should have been normalised to asterisk italics.
+    expect(content).not.toContain('_italic text_');
+    expect(content).toContain('*italic text*');
+  }, 20000);
+
+  it('pull: preserves underscores inside inline code', async () => {
+    const page = (await notion.pages.create({
+      parent: { page_id: parentId },
+      properties: {
+        title: { title: [{ type: 'text', text: { content: 'Code Underscore Test' } }] },
+      },
+      markdown: 'Use `some_var_name` in your code.',
+    })) as { id: string };
+
+    const pullFile = path.join(tmpDir, 'code-underscore-test.md');
+    await syncNotionFile(notion, {
+      path: pullFile,
+      page_id: page.id,
+      direction: 'pull',
+    });
+
+    const content = fs.readFileSync(pullFile, 'utf8');
+    expect(content).toContain('`some_var_name`');
+  }, 20000);
 });

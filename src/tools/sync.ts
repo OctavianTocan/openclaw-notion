@@ -242,7 +242,8 @@ async function pushLocalFile(
         `Failed to push content to page ${pageId}: ${detail}\n` +
           `Hint: if the page has child pages or databases, ensure the local file ` +
           `contains <page url="...">Title</page> tags for each child. ` +
-          `Pull the page first to get the correct references.`
+          `Pull the page first to get the correct references.`,
+        { cause: error }
       );
     }
     finalPage = await updatePageTitleIfPossible(notion, pageId, title);
@@ -300,26 +301,27 @@ function extractNotionErrorDetail(error: unknown): string {
  * Normalising on pull prevents cosmetic diffs from accumulating across
  * pull-push cycles.
  *
- * Skips content inside code fences and inline code spans to avoid mangling
- * code samples.
+ * Skips content inside code fences, inline code spans, and link targets
+ * `[text](url)` to avoid mangling code samples or URLs containing underscores.
+ * Also avoids rewriting `__bold__` (double-underscore) delimiters.
  *
  * @param markdown - Raw markdown string from Notion.
  * @returns Markdown with underscore italics replaced by asterisk italics.
  */
 function normalizeItalics(markdown: string): string {
-  // Split on code fences and inline code so we only transform prose regions.
-  // Fenced code blocks: ```...``` (greedy, multiline)
-  // Inline code: `...` (non-greedy, single line)
-  const codePattern = /(```[\s\S]*?```|`[^`]+`)/g;
-  const parts = markdown.split(codePattern);
+  // Split on code fences, inline code, and markdown link targets so we only
+  // transform prose regions. Link targets are excluded because URLs often
+  // contain underscores (e.g. https://example.com/_docs_/v1).
+  const protectedPattern = /(```[\s\S]*?```|`[^`]+`|\]\([^)]*\))/g;
+  const parts = markdown.split(protectedPattern);
 
   for (let i = 0; i < parts.length; i++) {
-    // Even indices are prose, odd indices are code (captured by the split regex).
+    // Even indices are prose, odd indices are protected (captured by the split regex).
     if (i % 2 === 0) {
-      // Replace _word_ patterns that aren't inside a larger word (bounded by
-      // non-word chars or start/end of string). Handles multi-word spans like
-      // _some phrase here_ by matching across spaces.
-      parts[i] = parts[i].replace(/(?<=^|[^\\a-zA-Z0-9])_([^\n_]+?)_(?=[^a-zA-Z0-9]|$)/g, '*$1*');
+      // Match single-underscore emphasis that isn't part of a __bold__ pair.
+      // Capture the leading boundary character so we can reinsert it, avoiding
+      // variable-length lookbehind which is unreliable across JS engines.
+      parts[i] = parts[i].replace(/(^|[^\\a-zA-Z0-9_])_([^\n_]+?)_(?=[^a-zA-Z0-9_]|$)/g, '$1*$2*');
     }
   }
 
@@ -330,7 +332,8 @@ function normalizeItalics(markdown: string): string {
  * Enumerate child pages and databases for a Notion page.
  *
  * Walks the page's block children to find `child_page` and `child_database`
- * blocks. Returns an array of `{ id, title, type, url }` objects.
+ * blocks. Builds deterministic Notion URLs from block IDs instead of making
+ * per-child API calls, avoiding N+1 request patterns and rate-limit pressure.
  *
  * @param notion - Authenticated Notion client.
  * @param pageId - UUID of the parent page.
@@ -362,8 +365,15 @@ async function enumerateChildBlocks(
       if (b.type === 'child_page') {
         const childPage = b.child_page as { title?: string } | undefined;
         const title = childPage?.title ?? 'Untitled';
-        const page = await retrievePageMetadata(notion, b.id);
-        children.push({ id: b.id, title, type: 'child_page', url: page.url ?? null });
+        // Build the URL from the block ID to avoid an extra API call per child.
+        // appendMissingChildTags uses this for the <page url="..."> tag.
+        const idNoDashes = b.id.replace(/-/g, '');
+        children.push({
+          id: b.id,
+          title,
+          type: 'child_page',
+          url: `https://www.notion.so/${idNoDashes}`,
+        });
       } else if (b.type === 'child_database') {
         const childDb = b.child_database as { title?: string } | undefined;
         const title = childDb?.title ?? 'Untitled';
@@ -378,6 +388,30 @@ async function enumerateChildBlocks(
 }
 
 /**
+ * Escape characters that are special in XML/HTML attribute values.
+ *
+ * @param value - Raw attribute string (typically a URL).
+ * @returns Escaped string safe for use inside double-quoted attributes.
+ */
+function escapeTagAttribute(value: string): string {
+  return value
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+
+/**
+ * Escape characters that are special in XML/HTML text content.
+ *
+ * @param value - Raw text (typically a page or database title).
+ * @returns Escaped string safe for use as element text content.
+ */
+function escapeTagText(value: string): string {
+  return value.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
+/**
  * Append child page/database reference tags to pulled markdown.
  *
  * The Notion retrieveMarkdown endpoint may omit `<page>` tags for child pages
@@ -385,7 +419,9 @@ async function enumerateChildBlocks(
  * the enhanced markdown output. Appending these tags ensures the pulled content
  * is push-safe: pushing it back won't trigger Notion's child-page safety error.
  *
- * Only appends tags for children whose URLs don't already appear in the markdown.
+ * Only appends tags for children not already referenced via `<page url="...">`
+ * or `<database url="...">` patterns in the markdown. Titles and URLs are
+ * XML-escaped to prevent malformed markup from unusual page names.
  *
  * @param markdown - Enhanced markdown string from retrieveMarkdown.
  * @param children - Child blocks discovered via blocks.children.list.
@@ -405,25 +441,19 @@ function appendMissingChildTags(
   const missingTags: string[] = [];
 
   for (const child of children) {
-    // Check if this child is already referenced in the markdown by its URL or ID.
-    // The enhanced markdown format uses <page url="..."> or the ID might appear
-    // in an <unknown> tag or inline reference.
     const idNoDashes = child.id.replace(/-/g, '');
-    const alreadyReferenced =
-      (child.url && markdown.includes(child.url)) ||
-      markdown.includes(child.id) ||
-      markdown.includes(idNoDashes);
 
-    if (!alreadyReferenced) {
-      if (child.type === 'child_page') {
-        // Use Notion's enhanced markdown format for child page references.
-        const url = child.url ?? `https://www.notion.so/${idNoDashes}`;
-        missingTags.push(`<page url="${url}">${child.title}</page>`);
-      } else {
-        const url = `https://www.notion.so/${idNoDashes}`;
-        missingTags.push(`<database url="${url}">${child.title}</database>`);
-      }
-    }
+    // Check for actual enhanced-markdown reference tags or <unknown> tags that
+    // contain this child's ID, rather than a loose substring match that could
+    // false-positive on unrelated content.
+    const tagPattern = new RegExp(`<(?:page|database|unknown)[^>]*(?:${child.id}|${idNoDashes})`);
+    if (tagPattern.test(markdown)) continue;
+
+    const url = child.url ?? `https://www.notion.so/${idNoDashes}`;
+    const tagName = child.type === 'child_page' ? 'page' : 'database';
+    missingTags.push(
+      `<${tagName} url="${escapeTagAttribute(url)}">${escapeTagText(child.title)}</${tagName}>`
+    );
   }
 
   if (missingTags.length === 0) return markdown;
@@ -459,15 +489,21 @@ async function pullRemotePage(
   if (typeof rawMarkdown !== 'string') {
     throw new Error('Expected markdownPage.markdown to be a string');
   }
+  if (markdownPage.truncated === true) {
+    throw new Error(
+      `Refusing to write truncated markdown for page ${pageId}; pull would not be round-trip safe.`
+    );
+  }
   let markdown: string = rawMarkdown;
+
+  // Normalise underscore italics to asterisk italics BEFORE appending child
+  // tags, so the normaliser never touches the generated <page>/<database> markup.
+  markdown = normalizeItalics(markdown);
 
   // Discover child pages/databases and ensure they're referenced in the
   // markdown so a subsequent push won't trigger Notion's safety error.
   const children = await enumerateChildBlocks(notion, pageId);
   markdown = appendMissingChildTags(markdown, children);
-
-  // Normalise underscore italics to asterisk italics to prevent cosmetic drift.
-  markdown = normalizeItalics(markdown);
 
   await writeMarkdownFile(localState.absolutePath, markdown, mergedData);
   const refreshedStat = await fsp.stat(localState.absolutePath);
