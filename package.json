@@ -33,7 +33,7 @@
     "@biomejs/biome": "^2.4.12",
     "@types/better-sqlite3": "^7.6.13",
     "@types/node": "^25.6.0",
-    "openclaw": "^2026.4.15",
+    "openclaw": "^2026.4.19-beta.2",
     "typescript": "^6.0.3",
     "vitest": "^4.1.4"
   },
