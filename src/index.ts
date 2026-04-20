@@ -41,6 +41,7 @@ export {
   extractFrontmatterIds,
   extractNotionErrorDetail,
   normalizeItalics,
+  readLocalFileState,
   stripFrontmatter,
   syncNotionFile,
 } from './tools/sync.js';

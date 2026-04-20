@@ -112,13 +112,41 @@ export function extractFrontmatterIds(raw: string): Record<string, unknown> {
   const result: Record<string, unknown> = {};
 
   // Match simple key: value lines for the fields the sync flow depends on.
+  // After trimming, strip surrounding quotes and trailing inline comments
+  // so values like `notion_id: "abcd..."` or `notion_id: abcd # note`
+  // resolve to the bare identifier the sync flow expects.
   const notionIdMatch = block.match(/^notion_id:\s*(.+)$/m);
-  if (notionIdMatch) result.notion_id = notionIdMatch[1].trim();
+  if (notionIdMatch) result.notion_id = unquoteScalar(notionIdMatch[1].trim());
 
   const titleMatch = block.match(/^title:\s*(.+)$/m);
-  if (titleMatch) result.title = titleMatch[1].trim();
+  if (titleMatch) result.title = unquoteScalar(titleMatch[1].trim());
 
   return result;
+}
+
+/**
+ * Strip surrounding quotes and trailing inline YAML comments from a scalar.
+ *
+ * Handles `"value"`, `'value'`, and `value # comment` forms so that
+ * best-effort frontmatter extraction returns clean identifiers.
+ *
+ * @param value - Raw scalar text (already trimmed of leading/trailing whitespace).
+ * @returns The bare value without quotes or inline comments.
+ */
+function unquoteScalar(value: string): string {
+  // Strip matching surrounding quotes first.
+  if (
+    (value.startsWith('"') && value.endsWith('"')) ||
+    (value.startsWith("'") && value.endsWith("'"))
+  ) {
+    return value.slice(1, -1).trim();
+  }
+  // Strip trailing inline comment (` # ...`).
+  const commentIdx = value.indexOf(' #');
+  if (commentIdx !== -1) {
+    return value.slice(0, commentIdx).trim();
+  }
+  return value;
 }
 
 /**

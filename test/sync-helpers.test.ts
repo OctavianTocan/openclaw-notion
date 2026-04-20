@@ -6,7 +6,10 @@
  * any Notion API calls. Fast, deterministic, and safe to run anywhere.
  */
 
-import { describe, expect, it } from 'vitest';
+import * as fs from 'node:fs/promises';
+import * as os from 'node:os';
+import * as path from 'node:path';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import {
   appendMissingChildTags,
   escapeTagAttribute,
@@ -14,6 +17,7 @@ import {
   extractFrontmatterIds,
   extractNotionErrorDetail,
   normalizeItalics,
+  readLocalFileState,
   stripFrontmatter,
 } from '../src/index.js';
 
@@ -362,5 +366,88 @@ describe('extractFrontmatterIds', () => {
   it('handles notion_id with surrounding whitespace', () => {
     const raw = '---\nnotion_id:   abc-123  \n---\n# Body';
     expect(extractFrontmatterIds(raw).notion_id).toBe('abc-123');
+  });
+
+  it('strips double quotes from notion_id', () => {
+    const raw = '---\nnotion_id: "abc-123-def"\n---\n# Body';
+    expect(extractFrontmatterIds(raw).notion_id).toBe('abc-123-def');
+  });
+
+  it('strips single quotes from notion_id', () => {
+    const raw = "---\nnotion_id: 'abc-123-def'\n---\n# Body";
+    expect(extractFrontmatterIds(raw).notion_id).toBe('abc-123-def');
+  });
+
+  it('strips trailing inline comment from notion_id', () => {
+    const raw = '---\nnotion_id: abc-123 # linked page\n---\n# Body';
+    expect(extractFrontmatterIds(raw).notion_id).toBe('abc-123');
+  });
+
+  it('strips quotes from title', () => {
+    const raw = '---\ntitle: "My Page Title"\n---\n# Body';
+    expect(extractFrontmatterIds(raw).title).toBe('My Page Title');
+  });
+});
+
+/* ------------------------------------------------------------------ */
+/*  stripFrontmatter — edge cases                                       */
+/* ------------------------------------------------------------------ */
+
+describe('stripFrontmatter edge cases', () => {
+  it('leaves content unchanged when frontmatter fence is unterminated', () => {
+    const input = '---\ntitle: Hello\nbody: test\n# still yaml or text';
+    expect(stripFrontmatter(input)).toBe(input);
+  });
+});
+
+/* ------------------------------------------------------------------ */
+/*  readLocalFileState — YAML fallback integration                       */
+/* ------------------------------------------------------------------ */
+
+describe('readLocalFileState YAML fallback', () => {
+  let tmpDir: string;
+
+  beforeAll(async () => {
+    tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'sync-test-'));
+  });
+
+  it('falls back to stripFrontmatter on malformed YAML, preserving notion_id', async () => {
+    const filePath = path.join(tmpDir, 'malformed.md');
+    // This YAML is invalid: unquoted colon in a value trips the parser.
+    const content = [
+      '---',
+      'notion_id: abc-123-def',
+      'description: Triggers: "tribunal", "panel critique".',
+      '---',
+      '# Body content',
+    ].join('\n');
+    await fs.writeFile(filePath, content, 'utf8');
+
+    const result = await readLocalFileState(filePath);
+
+    expect(result.exists).toBe(true);
+    // The body should match what stripFrontmatter would produce.
+    expect(result.content).toBe('# Body content');
+    // notion_id should be recovered by extractFrontmatterIds.
+    expect(result.data.notion_id).toBe('abc-123-def');
+    // Title was not in the frontmatter, so it shouldn't appear.
+    expect(result.data.title).toBeUndefined();
+  });
+
+  it('returns empty data when YAML fails and no recognized keys exist', async () => {
+    const filePath = path.join(tmpDir, 'no-keys.md');
+    const content = ['---', 'description: Triggers: "tribunal".', '---', '# Just body'].join('\n');
+    await fs.writeFile(filePath, content, 'utf8');
+
+    const result = await readLocalFileState(filePath);
+
+    expect(result.exists).toBe(true);
+    expect(result.content).toBe('# Just body');
+    expect(result.data).toEqual({});
+  });
+
+  // Cleanup temp files after all tests in this describe.
+  afterAll(async () => {
+    await fs.rm(tmpDir, { recursive: true, force: true });
   });
 });
