@@ -23,3 +23,8 @@ If a test needs a page with specific properties (title, icon, content, children)
 - Comments explain *why*, not *what*.
 - Run `biome check --write` before committing.
 - Run `tsc --noEmit` before pushing.
+
+## Rules (`.claude/rules/`)
+
+- **YAML Fallback Safety** (`yaml-fallback-safety.md`): When catching YAML parse errors, always recover identity fields (`notion_id`, `title`) via best-effort regex extraction. Strip quotes and inline comments from recovered values. Never silently drop `notion_id`.
+- **Narrow Error Catches** (`narrow-error-catches.md`): Never use bare `catch { }` when handling a specific failure class. Capture the error, check its type with a guard, and re-throw unexpected exceptions.
