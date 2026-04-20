@@ -27,6 +27,12 @@ import type { AnyBlock, AnyPage, LocalFileState, SyncParams } from '../types.js'
 /**
  * Read and parse a local markdown file, extracting frontmatter and stats.
  *
+ * When the YAML frontmatter contains values that trip the parser (unquoted
+ * colons, embedded quotes, etc.) this falls back to stripping the frontmatter
+ * block and treating the rest as the markdown body with empty metadata. The
+ * sync flow can still proceed — it just won't extract `notion_id` or `title`
+ * from the broken frontmatter.
+ *
  * @param filePath - Relative or absolute path to the file.
  * @returns Parsed local state including frontmatter data, body content,
  *   and filesystem stats. Returns `exists: false` when the file is missing.
@@ -37,14 +43,26 @@ export async function readLocalFileState(filePath: string): Promise<LocalFileSta
   try {
     const stat = await fsp.stat(absolutePath);
     const raw = await fsp.readFile(absolutePath, 'utf8');
-    const parsed = matter(raw);
-    return {
-      absolutePath,
-      exists: true,
-      data: isRecord(parsed.data) ? parsed.data : {},
-      content: parsed.content,
-      stat,
-    };
+    let data: Record<string, unknown> = {};
+    let content: string;
+
+    try {
+      const parsed = matter(raw);
+      data = isRecord(parsed.data) ? parsed.data : {};
+      content = parsed.content;
+    } catch (parseError) {
+      // Only fall back for YAML parse errors. Re-throw anything else
+      // (e.g. out-of-memory, encoding issues) so it surfaces normally.
+      if (!isYamlParseError(parseError)) throw parseError;
+
+      content = stripFrontmatter(raw);
+      // Best-effort: pull notion_id from the raw frontmatter so the sync
+      // can still link to the existing Notion page instead of creating a
+      // duplicate.
+      data = extractFrontmatterIds(raw);
+    }
+
+    return { absolutePath, exists: true, data, content, stat };
   } catch (error) {
     if (isRecord(error) && error.code === 'ENOENT') {
       return {
@@ -57,6 +75,96 @@ export async function readLocalFileState(filePath: string): Promise<LocalFileSta
     }
     throw error;
   }
+}
+
+/**
+ * Check whether an error looks like a YAML parse failure from gray-matter/js-yaml.
+ *
+ * Narrows the catch so only known parse errors trigger the fallback path.
+ * Unexpected errors (OOM, encoding, etc.) still propagate.
+ */
+function isYamlParseError(error: unknown): boolean {
+  if (error instanceof Error) {
+    // js-yaml throws YAMLException which has a 'mark' property.
+    if ('mark' in error) return true;
+    // Fallback: check the message for common YAML parse error patterns.
+    const msg = error.message.toLowerCase();
+    return msg.includes('yaml') || msg.includes('mapping') || msg.includes('tag');
+  }
+  return false;
+}
+
+/**
+ * Best-effort extraction of `notion_id` (and optionally `title`) from raw
+ * frontmatter text when the full YAML parser has failed.
+ *
+ * Uses simple line-by-line regex matching, which works for flat key-value
+ * pairs even when the broader YAML structure is ambiguous.
+ *
+ * @param raw - Full file content including frontmatter delimiters.
+ * @returns A record with any extracted keys, or empty if none found.
+ */
+export function extractFrontmatterIds(raw: string): Record<string, unknown> {
+  const fmMatch = raw.match(/^---\r?\n([\s\S]*?)\r?\n---/);
+  if (!fmMatch) return {};
+
+  const block = fmMatch[1];
+  const result: Record<string, unknown> = {};
+
+  // Match simple key: value lines for the fields the sync flow depends on.
+  // After trimming, strip surrounding quotes and trailing inline comments
+  // so values like `notion_id: "abcd..."` or `notion_id: abcd # note`
+  // resolve to the bare identifier the sync flow expects.
+  const notionIdMatch = block.match(/^notion_id:\s*(.+)$/m);
+  if (notionIdMatch) result.notion_id = unquoteScalar(notionIdMatch[1].trim());
+
+  const titleMatch = block.match(/^title:\s*(.+)$/m);
+  if (titleMatch) result.title = unquoteScalar(titleMatch[1].trim());
+
+  return result;
+}
+
+/**
+ * Strip surrounding quotes and trailing inline YAML comments from a scalar.
+ *
+ * Handles `"value"`, `'value'`, and `value # comment` forms so that
+ * best-effort frontmatter extraction returns clean identifiers.
+ *
+ * @param value - Raw scalar text (already trimmed of leading/trailing whitespace).
+ * @returns The bare value without quotes or inline comments.
+ */
+function unquoteScalar(value: string): string {
+  // Strip matching surrounding quotes first.
+  if (
+    (value.startsWith('"') && value.endsWith('"')) ||
+    (value.startsWith("'") && value.endsWith("'"))
+  ) {
+    return value.slice(1, -1).trim();
+  }
+  // Strip trailing inline comment (` # ...`).
+  const commentIdx = value.indexOf(' #');
+  if (commentIdx !== -1) {
+    return value.slice(0, commentIdx).trim();
+  }
+  return value;
+}
+
+/**
+ * Strip YAML frontmatter fences from raw file content.
+ *
+ * Removes the leading `---` … `---` block (if present) and returns everything
+ * after the closing fence. Used as a fallback when the YAML parser rejects the
+ * frontmatter content.
+ *
+ * @param raw - Full file content including frontmatter delimiters.
+ * @returns The file content without the frontmatter block.
+ */
+export function stripFrontmatter(raw: string): string {
+  const match = raw.match(/^---\r?\n[\s\S]*?\n---\r?\n?/);
+  if (match) {
+    return raw.slice(match[0].length);
+  }
+  return raw;
 }
 
 /**
