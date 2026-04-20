@@ -38,7 +38,8 @@ export type Operation =
   | 'sync_pull'
   | 'sync_auto'
   | 'help'
-  | 'doctor';
+  | 'doctor'
+  | 'upload_file';
 
 /**
  * Caller-supplied context attached to every audit log entry.
