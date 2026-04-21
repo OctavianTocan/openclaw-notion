@@ -15,7 +15,7 @@ import { logOperation, setAuditContext } from './audit.js';
 import { getClient, getMarkdownPagesApi } from './client.js';
 import { DEFAULT_PAGE_SIZE } from './constants.js';
 import { asJsonContent, asTextContent, wrapPageResponse } from './format.js';
-import { findTitlePropertyName } from './helpers.js';
+import { findTitlePropertyName, isRecord } from './helpers.js';
 import { runNotionDoctor } from './tools/doctor.js';
 import { getNotionFileTree } from './tools/file-tree.js';
 import { getNotionHelp } from './tools/help.js';
@@ -362,11 +362,18 @@ export default definePluginEntry({
     api.registerTool((ctx) => ({
       name: 'notion_comment_list',
       label: 'Notion Comment List',
-      description: 'List comments attached to a Notion page.',
+      description:
+        'List comments on a Notion page. Set include_all_blocks to true to also retrieve inline comments on child blocks (paragraphs, headings, etc.), not just page-level comments.',
       parameters: Type.Object({
         page_id: Type.String({
           description: 'The UUID of the Notion page whose comments to list.',
         }),
+        include_all_blocks: Type.Optional(
+          Type.Boolean({
+            description:
+              'When true, also fetches inline comments from every child block on the page. Defaults to false (page-level comments only).',
+          })
+        ),
       }),
       async execute(_id, params) {
         return withAudit({
@@ -375,9 +382,67 @@ export default definePluginEntry({
           agentId: ctx.agentId,
           targetPageId: params.page_id,
           fn: async () => {
-            return asJsonContent(
-              (await getClient(ctx.agentId).comments.list({ block_id: params.page_id })).results
-            );
+            const notion = getClient(ctx.agentId);
+
+            // Page-level comments (always fetched).
+            const pageComments = (await notion.comments.list({ block_id: params.page_id })).results;
+
+            if (!params.include_all_blocks) {
+              return asJsonContent(pageComments);
+            }
+
+            // Inline comments live on individual child blocks, not the page
+            // itself. Recursively walk the block tree to catch comments on
+            // nested blocks (inside toggles, columns, etc.), not just
+            // first-level children.
+            const allComments = [...pageComments];
+            const seenIds = new Set(pageComments.map((c: { id: string }) => c.id));
+
+            const collectBlockComments = async (parentId: string, depth: number) => {
+              // Cap recursion to avoid runaway traversal on deeply nested pages.
+              if (depth > 5) return;
+
+              let startCursor: string | undefined;
+              do {
+                const blocks = await notion.blocks.children.list({
+                  block_id: parentId,
+                  start_cursor: startCursor,
+                  page_size: DEFAULT_PAGE_SIZE,
+                });
+
+                for (const block of blocks.results) {
+                  const b = block as { id: string; has_children?: boolean };
+                  try {
+                    const blockComments = (await notion.comments.list({ block_id: b.id })).results;
+                    for (const comment of blockComments) {
+                      const c = comment as { id: string };
+                      if (!seenIds.has(c.id)) {
+                        seenIds.add(c.id);
+                        allComments.push(comment);
+                      }
+                    }
+                  } catch (error) {
+                    // Only swallow "not supported" errors. Re-surface network,
+                    // auth, and rate-limit failures so partial results are visible.
+                    if (isRecord(error) && typeof error.code === 'string') {
+                      const code = error.code;
+                      if (code === 'validation_error' || code === 'object_not_found') continue;
+                    }
+                    throw error;
+                  }
+                  // Recurse into blocks that have children (toggles, columns, etc.).
+                  if (b.has_children) {
+                    await collectBlockComments(b.id, depth + 1);
+                  }
+                }
+
+                startCursor = blocks.next_cursor ?? undefined;
+              } while (startCursor);
+            };
+
+            await collectBlockComments(params.page_id, 0);
+
+            return asJsonContent(allComments);
           },
         });
       },
