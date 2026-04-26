@@ -1,5 +1,5 @@
 /**
- * Tests for the secondary agent (gf_agent / Esther's workspace).
+ * Tests for the secondary agent.
  * Verifies workspace isolation and that the secondary agent key works.
  *
  * Each test file creates its own dedicated parent page in beforeAll().

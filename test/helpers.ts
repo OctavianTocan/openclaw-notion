@@ -23,17 +23,25 @@ const NOTION_CONFIG_DIR = path.join(os.homedir(), '.config', 'notion');
 /* ------------------------------------------------------------------ */
 
 function detectSecondaryAgentId(): string {
-  const secondaryKeyPath = path.join(NOTION_CONFIG_DIR, 'api_key_gf_agent');
-  if (fs.existsSync(secondaryKeyPath)) {
-    return 'gf_agent';
+  try {
+    const agentIds = fs
+      .readdirSync(NOTION_CONFIG_DIR)
+      .filter((entry) => entry.startsWith('api_key_'))
+      .map((entry) => entry.replace(/^api_key_/, ''))
+      .filter((agentId) => agentId && agentId !== 'default' && agentId !== 'main')
+      .sort();
+    if (agentIds[0]) {
+      return agentIds[0];
+    }
+  } catch {
+    // Missing config directories are handled by callers when they read keys.
   }
   return 'secondary';
 }
 
 export function getSecondaryAgentId(): string {
   if (process.env.NOTION_SECONDARY_AGENT) return process.env.NOTION_SECONDARY_AGENT;
-  if (fs.existsSync(path.join(NOTION_CONFIG_DIR, 'api_key_gf_agent'))) return 'gf_agent';
-  return 'secondary';
+  return detectSecondaryAgentId();
 }
 
 export const SECONDARY_AGENT = getSecondaryAgentId();
@@ -57,13 +65,9 @@ export function getNotionApiKey(agentId?: string): string {
     if (fs.existsSync(agentKeyPath)) {
       return fs.readFileSync(agentKeyPath, 'utf8').trim();
     }
-    const defaultKeyPath = path.join(NOTION_CONFIG_DIR, 'api_key');
-    if (fs.existsSync(defaultKeyPath)) {
-      return fs.readFileSync(defaultKeyPath, 'utf8').trim();
-    }
     throw new Error(
       `Notion API key not found for agent "${envAgent}". ` +
-        `Expected at ${agentKeyPath} or ${NOTION_CONFIG_DIR}/api_key.`
+        `Expected at ${agentKeyPath}; explicit agents do not fall back to ${NOTION_CONFIG_DIR}/api_key.`
     );
   }
 
@@ -72,14 +76,9 @@ export function getNotionApiKey(agentId?: string): string {
     return fs.readFileSync(agentKeyPath, 'utf8').trim();
   }
 
-  const defaultKeyPath = path.join(NOTION_CONFIG_DIR, 'api_key');
-  if (fs.existsSync(defaultKeyPath)) {
-    return fs.readFileSync(defaultKeyPath, 'utf8').trim();
-  }
-
   throw new Error(
     `Notion API key not found for agent "${agentId}". ` +
-      `Expected at ${agentKeyPath} or ${NOTION_CONFIG_DIR}/api_key.`
+      `Expected at ${agentKeyPath}; explicit agents do not fall back to ${NOTION_CONFIG_DIR}/api_key.`
   );
 }
 

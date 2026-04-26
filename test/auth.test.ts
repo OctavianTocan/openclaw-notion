@@ -8,7 +8,7 @@ import * as path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { getNotionApiKey } from '../src/auth.js';
 
-const SECONDARY_AGENT = 'gf_agent';
+const SECONDARY_AGENT = 'secondary_agent';
 
 describe('Key isolation', () => {
   const originalConfigDir = process.env.NOTION_CONFIG_DIR;
@@ -19,7 +19,7 @@ describe('Key isolation', () => {
     process.env.NOTION_CONFIG_DIR = tempDir;
     process.env.NOTION_SECONDARY_AGENT = SECONDARY_AGENT;
     fs.writeFileSync(path.join(tempDir, 'api_key'), 'ntn_default_test_key');
-    fs.writeFileSync(path.join(tempDir, 'api_key_gf_agent'), 'ntn_secondary_test_key');
+    fs.writeFileSync(path.join(tempDir, `api_key_${SECONDARY_AGENT}`), 'ntn_secondary_test_key');
   });
 
   afterEach(() => {
@@ -91,9 +91,19 @@ describe('Fail-closed key isolation', () => {
   it('does not let secondary fall back to the default key', () => {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'notion-auth-'));
     process.env.NOTION_CONFIG_DIR = tempDir;
-    process.env.NOTION_SECONDARY_AGENT = 'gf_agent';
+    process.env.NOTION_SECONDARY_AGENT = SECONDARY_AGENT;
     fs.writeFileSync(path.join(tempDir, 'api_key'), 'secret_default_key');
 
     expect(() => getNotionApiKey('secondary')).toThrow('explicit agents do not fall back');
+  });
+
+  it('auto-detects a generic secondary key when no env override is set', () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'notion-auth-'));
+    process.env.NOTION_CONFIG_DIR = tempDir;
+    delete process.env.NOTION_SECONDARY_AGENT;
+    fs.writeFileSync(path.join(tempDir, 'api_key'), 'secret_default_key');
+    fs.writeFileSync(path.join(tempDir, 'api_key_other_agent'), 'secret_other_key');
+
+    expect(getNotionApiKey('secondary')).toBe('secret_other_key');
   });
 });

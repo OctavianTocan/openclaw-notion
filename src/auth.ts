@@ -5,7 +5,7 @@
  * separate API keys stored in `~/.config/notion/`. The lookup order is:
  *
  * 1. `~/.config/notion/api_key_{agentId}` (agent-specific)
- * 2. `~/.config/notion/api_key_{NOTION_SECONDARY_AGENT}` (env-var override, 'secondary' only)
+ * 2. `~/.config/notion/api_key_{NOTION_SECONDARY_AGENT}` (env-var override, 'secondary' alias only)
  * 3. `~/.config/notion/api_key` (default agent only)
  *
  * This guarantees workspace isolation: an explicit agent must have an
@@ -22,14 +22,23 @@ function notionConfigDir(): string {
 }
 
 /**
- * Detect which agent key files are available on disk.
- * Returns 'gf_agent' if api_key_gf_agent exists (local dev), otherwise 'secondary' (CI default).
+ * Detect which explicit agent key files are available on disk.
+ * Returns the first non-default key suffix, otherwise the generic "secondary" alias.
  */
 function detectSecondaryAgentId(): string {
   const NOTION_CONFIG_DIR = notionConfigDir();
-  const secondaryKeyPath = path.join(NOTION_CONFIG_DIR, 'api_key_gf_agent');
-  if (fs.existsSync(secondaryKeyPath)) {
-    return 'gf_agent';
+  try {
+    const agentIds = fs
+      .readdirSync(NOTION_CONFIG_DIR)
+      .filter((entry) => entry.startsWith('api_key_'))
+      .map((entry) => entry.replace(/^api_key_/, ''))
+      .filter((agentId) => agentId && agentId !== 'default' && agentId !== 'main')
+      .sort();
+    if (agentIds[0]) {
+      return agentIds[0];
+    }
+  } catch {
+    // Missing config directories are handled by the caller's explicit error.
   }
   return 'secondary';
 }
@@ -58,7 +67,7 @@ export function getNotionApiKey(agentId?: string): string {
     );
   }
 
-  // 'secondary' is the named secondary agent — apply env-var override + disk detection.
+  // 'secondary' is a generic alias — apply env-var override + disk detection.
   if (agentId === 'secondary') {
     const envAgent = process.env.NOTION_SECONDARY_AGENT ?? detectSecondaryAgentId();
     const resolvedAgent = envAgent === 'secondary' ? detectSecondaryAgentId() : envAgent;
@@ -72,7 +81,7 @@ export function getNotionApiKey(agentId?: string): string {
     );
   }
 
-  // Explicit agent ID — look for its specific key file, then fall back to default.
+  // Explicit agent ID — require its specific key file and fail closed if absent.
   const agentKeyPath = path.join(NOTION_CONFIG_DIR, `api_key_${agentId}`);
   if (fs.existsSync(agentKeyPath)) {
     return fs.readFileSync(agentKeyPath, 'utf8').trim();
