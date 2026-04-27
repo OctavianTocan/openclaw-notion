@@ -16,9 +16,13 @@ description: Use when the user mentions Notion, links to Notion, asks about Noti
 - **`notion_file_tree`** — recursively enumerate child pages and databases under a page. Returns a tree with `{ title, id, url, type, children }`. Use `max_depth` to control recursion (default 3).
 
 ### Writing
-- **`notion_create`** — create a new page under a parent page. Accepts markdown and optional title. Returns `{ url, response }`.
+- **`notion_create`** — create a new page under a parent page. Returns `{ url, response }`.
+  - **Required:** `parent_id` (UUID of parent page), `markdown` (page body as markdown)
+  - **Optional:** `title` (page title string)
+  - ⚠️ `markdown` is **required**, not optional. A call without `markdown` will fail silently.
 - **`notion_append`** — append a text paragraph to the bottom of an existing page.
 - **`notion_update_markdown`** — replace a page's entire content with new markdown. Returns `{ url, response }`.
+  - **Required:** `page_id` (UUID), `markdown` (new content as markdown)
 - **`notion_update_page`** — update page properties: title, icon emoji. Returns `{ url, response }`.
 
 ### Database
@@ -72,6 +76,8 @@ Notion URLs contain the page ID as the last 32 hex characters (no dashes). Conve
 
 ## Rules
 
+- **All writing tools require `markdown` as a parameter** — never call `notion_create` or `notion_update_markdown` without it. If you don't have the content ready, prepare it first, then call the tool once.
+- **If a tool call fails, do NOT retry the same call more than twice.** Stop and tell the user what went wrong. Looping on a failed tool call wastes turns and sends duplicate messages.
 - Never use `web_fetch` on Notion URLs. It won't work and wastes a turn.
 - Never shell out to `curl` or Python scripts for Notion operations.
 - Prefer `notion_read_markdown` over `notion_read` unless you specifically need block-level data.
