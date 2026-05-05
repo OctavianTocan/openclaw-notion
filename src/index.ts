@@ -145,7 +145,7 @@ export default definePluginEntry({
           },
         });
       },
-    }));
+    }), { name: 'notion_search' });
 
     // --- notion_read ---
     api.registerTool((ctx) => ({
@@ -169,7 +169,7 @@ export default definePluginEntry({
           },
         });
       },
-    }));
+    }), { name: 'notion_read' });
 
     // --- notion_append ---
     api.registerTool((ctx) => ({
@@ -199,7 +199,7 @@ export default definePluginEntry({
           },
         });
       },
-    }));
+    }), { name: 'notion_append' });
 
     // --- notion_create ---
     api.registerTool((ctx) => ({
@@ -234,7 +234,7 @@ export default definePluginEntry({
           },
         });
       },
-    }));
+    }), { name: 'notion_create' });
 
     // --- notion_read_markdown ---
     api.registerTool((ctx) => ({
@@ -259,7 +259,7 @@ export default definePluginEntry({
           },
         });
       },
-    }));
+    }), { name: 'notion_read_markdown' });
 
     // --- notion_update_markdown ---
     api.registerTool((ctx) => ({
@@ -288,7 +288,7 @@ export default definePluginEntry({
           },
         });
       },
-    }));
+    }), { name: 'notion_update_markdown' });
 
     // --- notion_update_page ---
     api.registerTool((ctx) => ({
@@ -329,7 +329,7 @@ export default definePluginEntry({
           },
         });
       },
-    }));
+    }), { name: 'notion_update_page' });
 
     // --- notion_comment_create ---
     api.registerTool((ctx) => ({
@@ -356,7 +356,7 @@ export default definePluginEntry({
           },
         });
       },
-    }));
+    }), { name: 'notion_comment_create' });
 
     // --- notion_comment_list ---
     api.registerTool((ctx) => ({
@@ -381,7 +381,7 @@ export default definePluginEntry({
           },
         });
       },
-    }));
+    }), { name: 'notion_comment_list' });
 
     // --- notion_query ---
     api.registerTool((ctx) => ({
@@ -407,7 +407,7 @@ export default definePluginEntry({
           },
         });
       },
-    }));
+    }), { name: 'notion_query' });
 
     // --- notion_delete ---
     api.registerTool((ctx) => ({
@@ -426,7 +426,7 @@ export default definePluginEntry({
           },
         });
       },
-    }));
+    }), { name: 'notion_delete' });
 
     // --- notion_move ---
     api.registerTool((ctx) => ({
@@ -449,7 +449,7 @@ export default definePluginEntry({
           },
         });
       },
-    }));
+    }), { name: 'notion_move' });
 
     // --- notion_publish ---
     api.registerTool((ctx) => ({
@@ -474,7 +474,7 @@ export default definePluginEntry({
           },
         });
       },
-    }));
+    }), { name: 'notion_publish' });
 
     // --- notion_file_tree ---
     api.registerTool((ctx) => ({
@@ -498,7 +498,7 @@ export default definePluginEntry({
           },
         });
       },
-    }));
+    }), { name: 'notion_file_tree' });
 
     // --- notion_sync ---
     api.registerTool((ctx) => ({
@@ -537,7 +537,7 @@ export default definePluginEntry({
           },
         });
       },
-    }));
+    }), { name: 'notion_sync' });
 
     // --- notion_help ---
     api.registerTool((ctx) => ({
@@ -557,7 +557,7 @@ export default definePluginEntry({
           },
         });
       },
-    }));
+    }), { name: 'notion_help' });
 
     // --- notion_doctor ---
     api.registerTool((ctx) => ({
@@ -575,7 +575,7 @@ export default definePluginEntry({
           },
         });
       },
-    }));
+    }), { name: 'notion_doctor' });
 
     // --- notion_logs_read ---
     api.registerTool((ctx) => ({
@@ -618,6 +618,6 @@ export default definePluginEntry({
           })
         );
       },
-    }));
+    }), { name: 'notion_logs_read' });
   },
 });
