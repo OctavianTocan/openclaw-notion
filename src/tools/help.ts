@@ -126,6 +126,17 @@ export const TOOL_DOCS: ToolDoc[] = [
     example: '{}',
   },
   {
+    name: 'notion_upload_file',
+    description: 'Upload a local file to Notion and attach it as a file block on a page.',
+    parameters: [
+      'file_path: string',
+      'page_id: string',
+      'display_name?: string',
+      'content_type?: string',
+    ],
+    example: '{"file_path":"./report.pdf","page_id":"<page-id>","display_name":"Q4 Report.pdf"}',
+  },
+  {
     name: 'notion_logs_read',
     description:
       'Read audit log entries from the local notion-operations.db with optional filters.',

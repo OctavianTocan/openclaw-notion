@@ -85,6 +85,33 @@ export type SyncParams = {
   direction?: 'push' | 'pull' | 'auto';
 };
 
+/** Parameters accepted by {@link uploadNotionFile}. */
+export type UploadParams = {
+  file_path: string;
+  page_id: string;
+  display_name?: string;
+  content_type?: string;
+};
+
+/**
+ * Capability interface for the Notion SDK's fileUploads namespace.
+ *
+ * The SDK types haven't caught up with the fileUploads API yet, so we define
+ * the subset we use to avoid raw `any` casts throughout upload code.
+ */
+export type FileUploadsApi = {
+  create: (args: {
+    filename: string;
+    content_type: string;
+    mode: 'single_part';
+  }) => Promise<{ id: string; upload_url: string }>;
+  send: (args: {
+    file_upload_id: string;
+    file: import('node:fs').ReadStream;
+    filename: string;
+  }) => Promise<LooseRecord>;
+};
+
 /** Parameters accepted by {@link getNotionHelp}. */
 export type HelpParams = { tool_name?: string };
 
