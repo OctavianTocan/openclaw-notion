@@ -38,8 +38,11 @@ export {
   appendMissingChildTags,
   escapeTagAttribute,
   escapeTagText,
+  extractFrontmatterIds,
   extractNotionErrorDetail,
   normalizeItalics,
+  readLocalFileState,
+  stripFrontmatter,
   syncNotionFile,
 } from './tools/sync.js';
 

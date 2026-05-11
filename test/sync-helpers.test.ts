@@ -6,13 +6,19 @@
  * any Notion API calls. Fast, deterministic, and safe to run anywhere.
  */
 
-import { describe, expect, it } from 'vitest';
+import * as fs from 'node:fs/promises';
+import * as os from 'node:os';
+import * as path from 'node:path';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import {
   appendMissingChildTags,
   escapeTagAttribute,
   escapeTagText,
+  extractFrontmatterIds,
   extractNotionErrorDetail,
   normalizeItalics,
+  readLocalFileState,
+  stripFrontmatter,
 } from '../src/index.js';
 
 /* ------------------------------------------------------------------ */
@@ -269,5 +275,179 @@ describe('extractNotionErrorDetail', () => {
   it('handles error with only code, no message', () => {
     const error = { code: 'object_not_found' };
     expect(extractNotionErrorDetail(error)).toContain('[object_not_found]');
+  });
+});
+
+/* ------------------------------------------------------------------ */
+/*  stripFrontmatter                                                    */
+/* ------------------------------------------------------------------ */
+
+describe('stripFrontmatter', () => {
+  it('strips a valid frontmatter block', () => {
+    const input = '---\ntitle: Hello\n---\n# Body';
+    expect(stripFrontmatter(input)).toBe('# Body');
+  });
+
+  it('strips frontmatter with complex YAML that would break the parser', () => {
+    const input =
+      '---\nname: tribunal\ndescription: Triggers: "tribunal", "panel critique".\n---\n# Content';
+    expect(stripFrontmatter(input)).toBe('# Content');
+  });
+
+  it('returns content unchanged when no frontmatter is present', () => {
+    const input = '# Just markdown\n\nNo frontmatter here.';
+    expect(stripFrontmatter(input)).toBe(input);
+  });
+
+  it('handles empty frontmatter block', () => {
+    // Empty frontmatter (no content between fences) has no newline between
+    // the two --- delimiters, so it doesn't match the pattern. gray-matter
+    // parses this fine anyway, so the fallback path never sees it.
+    const input = '---\n---\n# Body';
+    expect(stripFrontmatter(input)).toBe('---\n---\n# Body');
+  });
+
+  it('handles Windows-style line endings', () => {
+    const input = '---\r\ntitle: Hello\r\n---\r\n# Body';
+    expect(stripFrontmatter(input)).toBe('# Body');
+  });
+
+  it('only strips the first frontmatter block', () => {
+    const input = '---\ntitle: Hello\n---\nMiddle\n---\nmore: yaml\n---\nEnd';
+    const result = stripFrontmatter(input);
+    expect(result).toBe('Middle\n---\nmore: yaml\n---\nEnd');
+  });
+
+  it('handles frontmatter with no trailing content', () => {
+    const input = '---\ntitle: Hello\n---\n';
+    expect(stripFrontmatter(input)).toBe('');
+  });
+
+  it('strips multi-line frontmatter with many keys', () => {
+    const input =
+      '---\ntitle: Hello\nauthor: Someone\ntags: a, b, c\nnotion_id: abc-123\n---\n# Body';
+    expect(stripFrontmatter(input)).toBe('# Body');
+  });
+});
+
+/* ------------------------------------------------------------------ */
+/*  extractFrontmatterIds                                               */
+/* ------------------------------------------------------------------ */
+
+describe('extractFrontmatterIds', () => {
+  it('extracts notion_id from raw frontmatter', () => {
+    const raw = '---\ntitle: Test\nnotion_id: abc-123-def\n---\n# Body';
+    const result = extractFrontmatterIds(raw);
+    expect(result.notion_id).toBe('abc-123-def');
+  });
+
+  it('extracts title from raw frontmatter', () => {
+    const raw = '---\ntitle: My Page\nnotion_id: abc\n---\n# Body';
+    const result = extractFrontmatterIds(raw);
+    expect(result.title).toBe('My Page');
+  });
+
+  it('handles frontmatter where only notion_id is present', () => {
+    const raw = '---\ndescription: Triggers: "tribunal"\nnotion_id: abc-123\n---\n# Body';
+    const result = extractFrontmatterIds(raw);
+    expect(result.notion_id).toBe('abc-123');
+    expect(result.title).toBeUndefined();
+  });
+
+  it('returns empty object when no frontmatter is present', () => {
+    expect(extractFrontmatterIds('# No frontmatter')).toEqual({});
+  });
+
+  it('returns empty object when frontmatter has no recognized keys', () => {
+    const raw = '---\nfoo: bar\nbaz: qux\n---\n# Body';
+    expect(extractFrontmatterIds(raw)).toEqual({});
+  });
+
+  it('handles notion_id with surrounding whitespace', () => {
+    const raw = '---\nnotion_id:   abc-123  \n---\n# Body';
+    expect(extractFrontmatterIds(raw).notion_id).toBe('abc-123');
+  });
+
+  it('strips double quotes from notion_id', () => {
+    const raw = '---\nnotion_id: "abc-123-def"\n---\n# Body';
+    expect(extractFrontmatterIds(raw).notion_id).toBe('abc-123-def');
+  });
+
+  it('strips single quotes from notion_id', () => {
+    const raw = "---\nnotion_id: 'abc-123-def'\n---\n# Body";
+    expect(extractFrontmatterIds(raw).notion_id).toBe('abc-123-def');
+  });
+
+  it('strips trailing inline comment from notion_id', () => {
+    const raw = '---\nnotion_id: abc-123 # linked page\n---\n# Body';
+    expect(extractFrontmatterIds(raw).notion_id).toBe('abc-123');
+  });
+
+  it('strips quotes from title', () => {
+    const raw = '---\ntitle: "My Page Title"\n---\n# Body';
+    expect(extractFrontmatterIds(raw).title).toBe('My Page Title');
+  });
+});
+
+/* ------------------------------------------------------------------ */
+/*  stripFrontmatter — edge cases                                       */
+/* ------------------------------------------------------------------ */
+
+describe('stripFrontmatter edge cases', () => {
+  it('leaves content unchanged when frontmatter fence is unterminated', () => {
+    const input = '---\ntitle: Hello\nbody: test\n# still yaml or text';
+    expect(stripFrontmatter(input)).toBe(input);
+  });
+});
+
+/* ------------------------------------------------------------------ */
+/*  readLocalFileState — YAML fallback integration                       */
+/* ------------------------------------------------------------------ */
+
+describe('readLocalFileState YAML fallback', () => {
+  let tmpDir: string;
+
+  beforeAll(async () => {
+    tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'sync-test-'));
+  });
+
+  it('falls back to stripFrontmatter on malformed YAML, preserving notion_id', async () => {
+    const filePath = path.join(tmpDir, 'malformed.md');
+    // This YAML is invalid: unquoted colon in a value trips the parser.
+    const content = [
+      '---',
+      'notion_id: abc-123-def',
+      'description: Triggers: "tribunal", "panel critique".',
+      '---',
+      '# Body content',
+    ].join('\n');
+    await fs.writeFile(filePath, content, 'utf8');
+
+    const result = await readLocalFileState(filePath);
+
+    expect(result.exists).toBe(true);
+    // The body should match what stripFrontmatter would produce.
+    expect(result.content).toBe('# Body content');
+    // notion_id should be recovered by extractFrontmatterIds.
+    expect(result.data.notion_id).toBe('abc-123-def');
+    // Title was not in the frontmatter, so it shouldn't appear.
+    expect(result.data.title).toBeUndefined();
+  });
+
+  it('returns empty data when YAML fails and no recognized keys exist', async () => {
+    const filePath = path.join(tmpDir, 'no-keys.md');
+    const content = ['---', 'description: Triggers: "tribunal".', '---', '# Just body'].join('\n');
+    await fs.writeFile(filePath, content, 'utf8');
+
+    const result = await readLocalFileState(filePath);
+
+    expect(result.exists).toBe(true);
+    expect(result.content).toBe('# Just body');
+    expect(result.data).toEqual({});
+  });
+
+  // Cleanup temp files after all tests in this describe.
+  afterAll(async () => {
+    await fs.rm(tmpDir, { recursive: true, force: true });
   });
 });
