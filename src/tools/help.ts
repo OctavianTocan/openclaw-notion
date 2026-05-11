@@ -60,9 +60,10 @@ export const TOOL_DOCS: ToolDoc[] = [
   },
   {
     name: 'notion_comment_list',
-    description: 'List comments for a page.',
-    parameters: ['page_id: string'],
-    example: '{"page_id":"<page-id>"}',
+    description:
+      'List comments for a page. Set include_all_blocks to true to include inline comments on child blocks.',
+    parameters: ['page_id: string', 'include_all_blocks?: boolean (default false)'],
+    example: '{"page_id":"<page-id>","include_all_blocks":true}',
   },
   {
     name: 'notion_query',
